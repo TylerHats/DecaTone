@@ -1,0 +1,20 @@
+version: '3.8'
+
+services:
+  decatone:
+    image: tylerhats/decatone:latest
+    container_name: decatone-app
+    restart: unless-stopped
+    ports:
+      - "4000:4000"
+    environment:
+      - PORT=4000
+      - NODE_ENV=production
+      - JWT_SECRET=decatone_production_secret_change_me_12345
+    volumes:
+      - decatone-data:/app/backend/data
+      - decatone-uploads:/app/backend/uploads
+
+volumes:
+  decatone-data:
+  decatone-uploads:

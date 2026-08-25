@@ -1,0 +1,21 @@
+{
+  "name": "decatone",
+  "version": "1.0.0",
+  "description": "An open-source custom telephone switch system targeting vintage rotary hardware paired with ESP32-S3 IoT control and a modern web interface.",
+  "private": true,
+  "scripts": {
+    "setup": "npm run setup:backend && npm run setup:frontend",
+    "setup:backend": "cd backend && npm install --no-audit --no-fund",
+    "setup:frontend": "cd frontend && npm install --no-audit --no-fund",
+    "build": "npm run build:frontend && npm run build:backend",
+    "build:frontend": "cd frontend && npm run build",
+    "build:backend": "cd backend && npm run build",
+    "start": "cd backend && npm start",
+    "dev": "concurrently \"npm run dev:backend\" \"npm run dev:frontend\"",
+    "dev:backend": "cd backend && npm run dev",
+    "dev:frontend": "cd frontend && npm run dev"
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.2"
+  }
+}

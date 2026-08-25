@@ -1,0 +1,44 @@
+#pragma once
+#include <Arduino.h>
+#include <WiFi.h>
+#include <WebSocketsClient.h>
+#include <ArduinoJson.h>
+#include "config.h"
+
+enum CallState {
+  STATE_IDLE = 0,
+  STATE_DIALING,
+  STATE_RINGING,
+  STATE_IN_CALL
+};
+
+class NetworkClientManager {
+public:
+  void begin();
+  void update();
+
+  void sendHookState(bool isOffHook);
+  void sendDialDigit(char digit);
+  void sendCallAnswer();
+  void sendCallHangup();
+  void sendAudioPacket(const uint8_t* data, size_t len);
+
+  bool isConnected() const;
+  CallState getCallState() const;
+
+private:
+  WebSocketsClient m_webSocket;
+  CallState m_callState = STATE_IDLE;
+  bool m_isConnected = false;
+  uint32_t m_lastHeartbeat = 0;
+  String m_serverHost;
+  uint16_t m_serverPort = 4000;
+  bool m_useSsl = false;
+  String m_sessionKey;
+
+  void handleWebSocketEvent(WStype_t type, uint8_t* payload, size_t length);
+  void handleJsonCommand(const JsonDocument& doc);
+  void parseServerUrl(const String& fullUrl);
+};
+
+extern NetworkClientManager NetworkClient;

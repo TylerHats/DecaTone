@@ -1,0 +1,58 @@
+# Dependencies
+node_modules/
+.pnp
+.pnp.js
+
+# Build Outputs
+dist/
+build/
+*.tsbuildinfo
+
+# Persistent Data & User Uploads (Kept in Docker Volumes or local data dir)
+data/
+backend/data/
+backend/uploads/
+backend/dist/
+frontend/dist/
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+*.tar.gz
+backups/
+
+# PlatformIO & Embedded Firmware
+.pio/
+.pioenvs/
+.piolibdeps/
+firmware/.pio/
+firmware/.pioenvs/
+firmware/.piolibdeps/
+firmware/build/
+*.bin
+*.elf
+
+# Environment & Credentials
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+*.pem
+*.key
+*.cert
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# IDE & OS
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db

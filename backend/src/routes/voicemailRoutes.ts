@@ -1,0 +1,140 @@
+import { Router, Response } from 'express';
+import path from 'path';
+import fs from 'fs';
+import multer from 'multer';
+import { execute, query, queryOne } from '../db/connection';
+import { authenticateToken, AuthenticatedRequest } from '../middleware/authMiddleware';
+
+const router = Router();
+router.use(authenticateToken);
+
+const uploadsDir = process.env.UPLOADS_DIR || path.join(__dirname, '../../uploads');
+const greetingsDir = path.join(uploadsDir, 'greetings');
+const voicemailsDir = path.join(uploadsDir, 'voicemails');
+
+if (!fs.existsSync(greetingsDir)) fs.mkdirSync(greetingsDir, { recursive: true });
+if (!fs.existsSync(voicemailsDir)) fs.mkdirSync(voicemailsDir, { recursive: true });
+
+const storage = multer.diskStorage({
+  destination: (req, file, cb) => {
+    cb(null, greetingsDir);
+  },
+  filename: (req: AuthenticatedRequest, file, cb) => {
+    const ext = path.extname(file.originalname) || '.wav';
+    cb(null, `greeting_${req.user!.id}_${Date.now()}${ext}`);
+  }
+});
+
+const upload = multer({
+  storage,
+  limits: { fileSize: 10 * 1024 * 1024 } // 10MB max
+});
+
+// List User's Voicemails
+router.get('/', async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const voicemails = await query<any>(
+      `SELECT vm.*, 
+              u.username as caller_username, 
+              u.display_name as caller_display_name,
+              u.avatar_url as caller_avatar
+       FROM voicemails vm
+       LEFT JOIN users u ON u.id = vm.caller_user_id
+       WHERE vm.user_id = ?
+       ORDER BY vm.id DESC`,
+      [req.user!.id]
+    );
+
+    return res.json({ voicemails });
+  } catch (err) {
+    return res.status(500).json({ error: 'Failed to fetch voicemails' });
+  }
+});
+
+// Mark Voicemail Read
+router.put('/:id/read', async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    await execute('UPDATE voicemails SET is_read = 1 WHERE id = ? AND user_id = ?', [id, req.user!.id]);
+    return res.json({ success: true });
+  } catch (err) {
+    return res.status(500).json({ error: 'Failed to update voicemail' });
+  }
+});
+
+// Delete Voicemail
+router.delete('/:id', async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    const vm = await queryOne<any>('SELECT audio_url FROM voicemails WHERE id = ? AND user_id = ?', [id, req.user!.id]);
+
+    if (vm && vm.audio_url) {
+      const filename = path.basename(vm.audio_url);
+      const filePath = path.join(voicemailsDir, filename);
+      if (fs.existsSync(filePath)) {
+        fs.unlinkSync(filePath);
+      }
+    }
+
+    await execute('DELETE FROM voicemails WHERE id = ? AND user_id = ?', [id, req.user!.id]);
+    return res.json({ message: 'Voicemail deleted' });
+  } catch (err) {
+    return res.status(500).json({ error: 'Failed to delete voicemail' });
+  }
+});
+
+// Get Greeting
+router.get('/greeting', async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const greeting = await queryOne<any>('SELECT * FROM voicemail_greetings WHERE user_id = ?', [req.user!.id]);
+    return res.json({
+      hasCustomGreeting: !!greeting,
+      audioUrl: greeting?.audio_url || '/assets/sounds/default_greeting.wav'
+    });
+  } catch (err) {
+    return res.status(500).json({ error: 'Failed to fetch voicemail greeting' });
+  }
+});
+
+// Upload Custom Greeting
+router.post('/greeting/upload', upload.single('audio'), async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ error: 'No audio file provided' });
+    }
+
+    const audioUrl = `/uploads/greetings/${req.file.filename}`;
+
+    await execute(
+      `INSERT OR REPLACE INTO voicemail_greetings (user_id, audio_url, is_custom, updated_at)
+       VALUES (?, ?, 1, CURRENT_TIMESTAMP)`,
+      [req.user!.id, audioUrl]
+    );
+
+    return res.json({
+      message: 'Custom voicemail greeting saved!',
+      audioUrl
+    });
+  } catch (err: any) {
+    return res.status(500).json({ error: 'Failed to upload voicemail greeting' });
+  }
+});
+
+// Reset Greeting to Default
+router.post('/greeting/reset', async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const existing = await queryOne<any>('SELECT audio_url FROM voicemail_greetings WHERE user_id = ?', [req.user!.id]);
+    if (existing && existing.audio_url) {
+      const filename = path.basename(existing.audio_url);
+      const filePath = path.join(greetingsDir, filename);
+      if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
+    }
+
+    await execute('DELETE FROM voicemail_greetings WHERE user_id = ?', [req.user!.id]);
+    return res.json({ message: 'Voicemail greeting reset to default' });
+  } catch (err) {
+    return res.status(500).json({ error: 'Failed to reset greeting' });
+  }
+});
+
+export default router;
