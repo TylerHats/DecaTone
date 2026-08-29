@@ -4,7 +4,7 @@ import jwt from 'jsonwebtoken';
 import crypto from 'crypto';
 import { execute, queryOne } from '../db/connection';
 import { authenticateToken, AuthenticatedRequest, JWT_SECRET } from '../middleware/authMiddleware';
-import { getPhoneConfig, isNumberAvailable, generateAvailableNumber } from '../services/phoneAllocationService';
+import { getPhoneConfig, isNumberAvailable, generateAvailableNumber, validateChosenNumber } from '../services/phoneAllocationService';
 import { EmailService } from '../services/emailService';
 
 const router = Router();
@@ -62,16 +62,13 @@ router.post('/register', async (req: Request, res: Response) => {
     let assignedAreaCode = requestedAreaCode?.trim();
 
     if (assignedNumber && config.allowUserChoice) {
-      // Validate user requested number
-      if (!/^\d+$/.test(assignedNumber)) {
-        return res.status(400).json({ error: 'Phone number must contain only numeric digits' });
-      }
-      if (assignedNumber.length !== config.numberLength) {
-        return res.status(400).json({ error: `Phone number must be exactly ${config.numberLength} digits` });
+      const validation = validateChosenNumber(assignedNumber, config);
+      if (!validation.valid) {
+        return res.status(400).json({ error: validation.error });
       }
       const available = await isNumberAvailable(assignedNumber, assignedAreaCode);
       if (!available) {
-        return res.status(400).json({ error: `Phone number ${assignedNumber} is already in use` });
+        return res.status(400).json({ error: `Phone number ${assignedNumber} is already in use or reserved` });
       }
     } else {
       // Auto-assign available number
@@ -288,11 +285,17 @@ router.post('/login', async (req: Request, res: Response) => {
   }
 });
 
-// Get Current User Profile & Paired Phone Info
+// Current Authenticated User Info
 router.get('/me', authenticateToken, async (req: AuthenticatedRequest, res: Response) => {
   try {
     const user = await queryOne<any>(
-      'SELECT id, username, display_name, email, phone_number, area_code, role, call_privacy, notify_on_voicemail, notify_on_missed_call, avatar_url, created_at FROM users WHERE id = ?',
+      `SELECT id, username, display_name as displayName, email, phone_number as phoneNumber, area_code as areaCode,
+              role, call_privacy as callPrivacy, notify_on_voicemail as notifyOnVoicemail, notify_on_missed_call as notifyOnMissedCall,
+              dnd_manual_state as dndManualState, dnd_schedule_enabled as dndScheduleEnabled,
+              dnd_schedule_start as dndScheduleStart, dnd_schedule_end as dndScheduleEnd,
+              dnd_schedule_days as dndScheduleDays, dnd_override_period as dndOverridePeriod,
+              dnd_repeated_call_breakthrough as dndRepeatedCallBreakthrough
+       FROM users WHERE id = ?`,
       [req.user!.id]
     );
 
@@ -300,81 +303,85 @@ router.get('/me', authenticateToken, async (req: AuthenticatedRequest, res: Resp
       return res.status(404).json({ error: 'User not found' });
     }
 
-    // Get paired phone info if available
-    const phone = await queryOne<any>(
-      'SELECT device_id, mac_address, ip_address, firmware_version, rssi, is_online, hook_state, call_state, earpiece_volume, mic_sensitivity, ring_style, ring_cadence_custom, ring_timeout_sec, last_seen, paired_at FROM phones WHERE user_id = ?',
-      [user.id]
-    );
-
-    // Get unread voicemail count
-    const vmCount = await queryOne<{ count: number }>(
-      'SELECT COUNT(*) as count FROM voicemails WHERE user_id = ? AND is_read = 0',
-      [user.id]
-    );
-
-    return res.json({
-      user: {
-        ...user,
-        unreadVoicemails: vmCount?.count || 0
-      },
-      phone: phone || null
-    });
+    return res.json({ user });
   } catch (err) {
-    return res.status(500).json({ error: 'Failed to fetch user session' });
+    return res.status(500).json({ error: 'Failed to retrieve profile' });
   }
 });
 
-// Update Profile, Email & Privacy Preferences
+// Update User Profile & DND Preferences
 router.put('/profile', authenticateToken, async (req: AuthenticatedRequest, res: Response) => {
   try {
-    const { displayName, email, notifyOnVoicemail, notifyOnMissedCall, callPrivacy, newPassword, currentPassword } = req.body;
+    const {
+      displayName,
+      email,
+      callPrivacy,
+      notifyOnVoicemail,
+      notifyOnMissedCall,
+      dndManualState,
+      dndScheduleEnabled,
+      dndScheduleStart,
+      dndScheduleEnd,
+      dndScheduleDays,
+      dndRepeatedCallBreakthrough
+    } = req.body;
 
-    if (displayName) {
-      await execute('UPDATE users SET display_name = ? WHERE id = ?', [displayName.trim(), req.user!.id]);
+    const updates: string[] = [];
+    const params: any[] = [];
+
+    if (displayName !== undefined) {
+      updates.push('display_name = ?');
+      params.push(displayName.trim());
     }
-
     if (email !== undefined) {
-      const cleanEmail = email ? email.trim() : null;
-      if (cleanEmail) {
-        const existing = await queryOne('SELECT id FROM users WHERE email = ? AND id != ?', [cleanEmail, req.user!.id]);
-        if (existing) {
-          return res.status(400).json({ error: 'Email address is already in use by another user' });
-        }
-      }
-      await execute('UPDATE users SET email = ? WHERE id = ?', [cleanEmail, req.user!.id]);
+      updates.push('email = ?');
+      params.push(email ? email.trim() : null);
     }
-
+    if (callPrivacy !== undefined) {
+      updates.push('call_privacy = ?');
+      params.push(callPrivacy);
+    }
     if (notifyOnVoicemail !== undefined) {
-      await execute('UPDATE users SET notify_on_voicemail = ? WHERE id = ?', [notifyOnVoicemail ? 1 : 0, req.user!.id]);
+      updates.push('notify_on_voicemail = ?');
+      params.push(notifyOnVoicemail ? 1 : 0);
     }
-
     if (notifyOnMissedCall !== undefined) {
-      await execute('UPDATE users SET notify_on_missed_call = ? WHERE id = ?', [notifyOnMissedCall ? 1 : 0, req.user!.id]);
+      updates.push('notify_on_missed_call = ?');
+      params.push(notifyOnMissedCall ? 1 : 0);
+    }
+    if (dndManualState !== undefined) {
+      updates.push('dnd_manual_state = ?');
+      params.push(dndManualState ? 1 : 0);
+    }
+    if (dndScheduleEnabled !== undefined) {
+      updates.push('dnd_schedule_enabled = ?');
+      params.push(dndScheduleEnabled ? 1 : 0);
+    }
+    if (dndScheduleStart !== undefined) {
+      updates.push('dnd_schedule_start = ?');
+      params.push(dndScheduleStart);
+    }
+    if (dndScheduleEnd !== undefined) {
+      updates.push('dnd_schedule_end = ?');
+      params.push(dndScheduleEnd);
+    }
+    if (dndScheduleDays !== undefined) {
+      updates.push('dnd_schedule_days = ?');
+      params.push(dndScheduleDays);
+    }
+    if (dndRepeatedCallBreakthrough !== undefined) {
+      updates.push('dnd_repeated_call_breakthrough = ?');
+      params.push(dndRepeatedCallBreakthrough ? 1 : 0);
     }
 
-    if (callPrivacy && ['anyone', 'friends_only', 'dnd'].includes(callPrivacy)) {
-      await execute('UPDATE users SET call_privacy = ? WHERE id = ?', [callPrivacy, req.user!.id]);
-    }
-
-    if (newPassword) {
-      if (!currentPassword) {
-        return res.status(400).json({ error: 'Current password is required to set a new password' });
-      }
-      const user = await queryOne<any>('SELECT password_hash FROM users WHERE id = ?', [req.user!.id]);
-      const valid = await bcrypt.compare(currentPassword, user.password_hash);
-      if (!valid) {
-        return res.status(400).json({ error: 'Current password incorrect' });
-      }
-      if (newPassword.length < 6) {
-        return res.status(400).json({ error: 'New password must be at least 6 characters' });
-      }
-      const newHash = await bcrypt.hash(newPassword, 10);
-      await execute('UPDATE users SET password_hash = ? WHERE id = ?', [newHash, req.user!.id]);
+    if (updates.length > 0) {
+      params.push(req.user!.id);
+      await execute(`UPDATE users SET ${updates.join(', ')} WHERE id = ?`, params);
     }
 
     return res.json({ message: 'Profile updated successfully' });
   } catch (err: any) {
-    return res.status(500).json({ error: 'Failed to update profile' });
+    return res.status(500).json({ error: err.message || 'Failed to update profile' });
   }
 });
 

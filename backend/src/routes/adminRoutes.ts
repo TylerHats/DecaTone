@@ -527,53 +527,6 @@ router.post('/update/apply', async (req: AuthenticatedRequest, res: Response) =>
   }
 });
 
-// 7. System Settings & Whitelabeling
-router.get('/settings', async (req: AuthenticatedRequest, res: Response) => {
-  try {
-    const rows = await query<any>('SELECT key, value FROM system_settings');
-    const settings: Record<string, string> = {
-      app_name: 'DecaTone',
-      logo_url: '/branding/logo.png',
-      phone_number_length: '3',
-      area_code_enabled: 'false',
-      area_codes_list: '555,212,312,415,800',
-      default_area_code: '555',
-      allow_user_number_choice: 'true',
-      number_assignment_mode: 'user_choice',
-      auto_backup_enabled: 'false',
-      auto_backup_interval: 'daily',
-      backup_retention_count: '10',
-      firmware_latest_version: '1.0.0',
-      smtp_host: '',
-      smtp_port: '587',
-      smtp_user: '',
-      smtp_pass: '',
-      smtp_from: '',
-      smtp_secure: 'false'
-    };
-    rows.forEach(r => (settings[r.key] = r.value));
-    return res.json({ settings });
-  } catch (err) {
-    return res.status(500).json({ error: 'Failed to fetch settings' });
-  }
-});
-
-router.post('/settings', async (req: AuthenticatedRequest, res: Response) => {
-  try {
-    const { settings } = req.body;
-    if (!settings || typeof settings !== 'object') {
-      return res.status(400).json({ error: 'Settings object required' });
-    }
-
-    for (const [key, value] of Object.entries(settings)) {
-      await execute('INSERT OR REPLACE INTO system_settings (key, value) VALUES (?, ?)', [key, String(value)]);
-    }
-
-    return res.json({ message: 'System settings saved successfully' });
-  } catch (err) {
-    return res.status(500).json({ error: 'Failed to save settings' });
-  }
-});
 
 router.post('/branding/logo', uploadLogo.single('logo'), async (req: AuthenticatedRequest, res: Response) => {
   try {

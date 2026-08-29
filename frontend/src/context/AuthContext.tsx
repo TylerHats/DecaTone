@@ -9,12 +9,24 @@ export interface User {
   areaCode?: string;
   role: string;
   callPrivacy?: string;
+  call_privacy?: string;
   notify_on_voicemail?: number;
   notify_on_missed_call?: number;
+  notifyOnVoicemail?: boolean;
+  notifyOnMissedCall?: boolean;
   unreadVoicemails?: number;
+  dndManualState?: number;
+  dndScheduleEnabled?: number;
+  dnd_manual_state?: number;
+  dnd_schedule_enabled?: number;
+  dnd_schedule_days?: string;
+  dnd_schedule_start?: string;
+  dnd_schedule_end?: string;
+  dnd_repeated_call_breakthrough?: number | boolean;
+  dndRepeatedCallBreakthrough?: boolean;
 }
 
-interface AuthContextType {
+export interface AuthContextType {
   user: User | null;
   token: string | null;
   loading: boolean;
@@ -51,7 +63,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         setUser(null);
       }
     } catch (err) {
-      console.error('Failed to fetch user session:', err);
+      console.error('Failed to fetch user:', err);
     } finally {
       setLoading(false);
     }
@@ -71,7 +83,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     localStorage.removeItem('decatone_token');
     setToken(null);
     setUser(null);
-    window.location.href = '/login';
   };
 
   return (
@@ -83,6 +94,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
 export const useAuth = () => {
   const context = useContext(AuthContext);
-  if (!context) throw new Error('useAuth must be used within an AuthProvider');
+  if (!context) {
+    throw new Error('useAuth must be used within an AuthProvider');
+  }
   return context;
 };

@@ -34,18 +34,22 @@ export interface ActiveCallState {
   durationSec?: number;
 }
 
-interface PhoneContextType {
+export interface PhoneContextType {
   phone: PhoneDevice | null;
+  settings: PhoneDevice | null;
   activeCall: ActiveCallState | null;
   currentDialBuffer: string;
   loading: boolean;
-  claimPhone: (deviceId: string) => Promise<boolean>;
-  unclaimPhone: () => Promise<void>;
+  fetchSettings: () => Promise<void>;
+  refreshPhone: () => Promise<void>;
   updateSettings: (settings: Partial<PhoneDevice>) => Promise<boolean>;
-  testRing: () => Promise<boolean>;
+  testRing: (ringStyle?: string, ringCadence?: string) => Promise<boolean>;
+  rebootPhone: () => Promise<boolean>;
+  claimPhone: (deviceId: string) => Promise<boolean>;
+  claimPhoneByCode: (wordPrefix: string, numericCode: string) => Promise<boolean>;
+  unclaimPhone: () => Promise<boolean>;
   dialNumber: (destination: string) => Promise<boolean>;
   hangup: () => Promise<void>;
-  refreshPhone: () => Promise<void>;
 }
 
 const PhoneContext = createContext<PhoneContextType | undefined>(undefined);
@@ -80,6 +84,8 @@ export const PhoneProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       setLoading(false);
     }
   }, [token, user]);
+
+  const fetchSettings = refreshPhone;
 
   // Connect WebSocket for live telephony switch events
   useEffect(() => {
@@ -151,6 +157,55 @@ export const PhoneProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     };
   }, [token, refreshPhone]);
 
+  const updateSettings = async (newSettings: Partial<PhoneDevice>): Promise<boolean> => {
+    if (!token) return false;
+    try {
+      const res = await fetch('/api/phone/settings', {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`
+        },
+        body: JSON.stringify(newSettings)
+      });
+      if (res.ok) {
+        await refreshPhone();
+        return true;
+      }
+    } catch (e) {}
+    return false;
+  };
+
+  const testRing = async (ringStyle?: string, ringCadence?: string): Promise<boolean> => {
+    if (!token) return false;
+    try {
+      const res = await fetch('/api/phone/test-ring', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`
+        },
+        body: JSON.stringify({ ringStyle, ringCadence })
+      });
+      return res.ok;
+    } catch (e) {
+      return false;
+    }
+  };
+
+  const rebootPhone = async (): Promise<boolean> => {
+    if (!token) return false;
+    try {
+      const res = await fetch('/api/phone/reboot', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      return res.ok;
+    } catch (e) {
+      return false;
+    }
+  };
+
   const claimPhone = async (deviceId: string): Promise<boolean> => {
     if (!token) return false;
     try {
@@ -166,46 +221,47 @@ export const PhoneProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         await refreshPhone();
         return true;
       }
-    } catch (e) {}
-    return false;
+      const data = await res.json();
+      throw new Error(data.error || 'Failed to claim phone');
+    } catch (err) {
+      throw err;
+    }
   };
 
-  const unclaimPhone = async () => {
-    if (!token) return;
-    await fetch('/api/phone/unclaim', {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${token}` }
-    });
-    setPhone(null);
-  };
-
-  const updateSettings = async (settings: Partial<PhoneDevice>): Promise<boolean> => {
+  const claimPhoneByCode = async (wordPrefix: string, numericCode: string): Promise<boolean> => {
     if (!token) return false;
     try {
-      const res = await fetch('/api/phone/settings', {
-        method: 'PUT',
+      const res = await fetch('/api/phone/claim-by-code', {
+        method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           Authorization: `Bearer ${token}`
         },
-        body: JSON.stringify(settings)
+        body: JSON.stringify({ wordPrefix, numericCode })
       });
       if (res.ok) {
         await refreshPhone();
         return true;
       }
-    } catch (e) {}
-    return false;
+      const data = await res.json();
+      throw new Error(data.error || 'Failed to claim phone');
+    } catch (err) {
+      throw err;
+    }
   };
 
-  const testRing = async (): Promise<boolean> => {
+  const unclaimPhone = async (): Promise<boolean> => {
     if (!token) return false;
     try {
-      const res = await fetch('/api/phone/test-ring', {
+      const res = await fetch('/api/phone/unclaim', {
         method: 'POST',
         headers: { Authorization: `Bearer ${token}` }
       });
-      return res.ok;
+      if (res.ok) {
+        setPhone(null);
+        return true;
+      }
+      return false;
     } catch (e) {
       return false;
     }
@@ -237,16 +293,20 @@ export const PhoneProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     <PhoneContext.Provider
       value={{
         phone,
+        settings: phone,
         activeCall,
         currentDialBuffer,
         loading,
-        claimPhone,
-        unclaimPhone,
+        fetchSettings,
+        refreshPhone,
         updateSettings,
         testRing,
+        rebootPhone,
+        claimPhone,
+        claimPhoneByCode,
+        unclaimPhone,
         dialNumber,
-        hangup,
-        refreshPhone
+        hangup
       }}
     >
       {children}

@@ -20,7 +20,7 @@ public:
 
   void sendHookState(bool isOffHook);
   void sendHookFlash();
-  void sendDialDigit(char digit);
+  void sendDialDigit(char digit, float pps = 0.0f, float breakRatio = 0.0f, uint32_t pulseCount = 0);
   void sendCallAnswer();
   void sendCallHangup();
   void sendAudioPacket(const uint8_t* data, size_t len);

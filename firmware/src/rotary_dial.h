@@ -2,34 +2,40 @@
 #include <Arduino.h>
 #include "config.h"
 
-typedef void (*OnDigitDialedCallback)(char digit);
-typedef void (*OnHookStateChangedCallback)(bool isOffHook);
-typedef void (*OnHookFlashCallback)();
+typedef void (*DigitDialedCallback)(char digit, float pps, float breakRatio, uint32_t pulseCount);
+typedef void (*HookStateCallback)(bool isOffHook);
+typedef void (*HookFlashCallback)();
 
 class RotaryDialManager {
 public:
-  void begin(OnDigitDialedCallback digitCb, OnHookStateChangedCallback hookCb, OnHookFlashCallback flashCb = nullptr);
+  void begin(DigitDialedCallback digitCb, HookStateCallback hookCb, HookFlashCallback flashCb = nullptr);
   void update();
   bool isOffHook() const;
 
-  // Interrupt handlers
+  // Interrupt Service Routines
   static void IRAM_ATTR handlePulseInterrupt();
   static void IRAM_ATTR handleHookInterrupt();
+  static void IRAM_ATTR handleOffNormalInterrupt();
 
 private:
+  DigitDialedCallback m_digitCallback = nullptr;
+  HookStateCallback m_hookCallback = nullptr;
+  HookFlashCallback m_flashCallback = nullptr;
+
+  bool m_currentOffHook = false;
+  uint32_t m_hookDebounceTime = 0;
+  uint32_t m_hookDownStartTime = 0;
+  bool m_evaluatingHookFlash = false;
+
+  // Pulse & Rhythm Tracking
   static volatile uint32_t s_pulseCount;
+  static volatile uint32_t s_firstPulseTime;
   static volatile uint32_t s_lastPulseTime;
+  static volatile uint32_t s_totalBreakDurationMs;
+  static volatile uint32_t s_pulseBreakStart;
   static volatile bool s_offNormalActive;
   static volatile bool s_hookChanged;
   static volatile uint32_t s_lastHookTime;
-
-  bool m_currentOffHook = false;
-  bool m_hookPendingHangup = false;
-  uint32_t m_hookDownTime = 0;
-  uint32_t m_lastProcessedPulseTime = 0;
-  OnDigitDialedCallback m_digitCallback = nullptr;
-  OnHookStateChangedCallback m_hookCallback = nullptr;
-  OnHookFlashCallback m_hookFlashCallback = nullptr;
 };
 
 extern RotaryDialManager RotaryDial;

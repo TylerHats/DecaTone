@@ -128,42 +128,6 @@ void NetworkClientManager::handleJsonCommand(const JsonDocument& doc) {
     if (doc["audioProfile"].is<const char*>()) Audio.setAudioProfile(doc["audioProfile"].as<String>());
     if (doc["sidetoneLevel"].is<int>()) Audio.setSidetoneLevel(doc["sidetoneLevel"]);
     if (doc["bellFrequencyHz"].is<float>()) BellRinger.setRingFrequency(doc["bellFrequencyHz"].as<float>());
-  } else if (strcmp(type, "play_tone") == 0) {
-    const char* tone = doc["tone"];
-    if (strcmp(tone, "dial") == 0) {
-      m_callState = STATE_DIALING;
-      Audio.playTone(TONE_DIAL);
-    } else if (strcmp(tone, "ringback") == 0) {
-      m_callState = STATE_RINGING;
-      Audio.playTone(TONE_RINGBACK);
-    } else if (strcmp(tone, "busy") == 0) {
-      Audio.playTone(TONE_BUSY);
-    }
-  } else if (strcmp(type, "stop_tone") == 0) {
-    Audio.stopTone();
-  } else if (strcmp(type, "incoming_call") == 0 || strcmp(type, "intercom_incoming") == 0) {
-    m_callState = STATE_RINGING;
-    const char* ringStyle = doc["ringStyle"] | "traditional";
-    const char* ringCadence = doc["ringCadence"] | (strcmp(type, "intercom_incoming") == 0 ? "300,300" : "2000,4000");
-    if (doc["bellFrequencyHz"].is<float>()) BellRinger.setRingFrequency(doc["bellFrequencyHz"].as<float>());
-    BellRinger.startRing(ringStyle, ringCadence);
-  } else if (strcmp(type, "stop_ring") == 0) {
-    BellRinger.stopRing();
-  } else if (strcmp(type, "call_connected") == 0) {
-    m_callState = STATE_IN_CALL;
-    BellRinger.stopRing();
-    Audio.stopTone();
-    m_sessionKey = doc["sessionKey"].as<String>();
-    Serial.println("[Switchboard] Call Connected. Two-way encrypted audio stream active.");
-  } else if (strcmp(type, "call_on_hold") == 0) {
-    m_callState = STATE_ON_HOLD;
-    Audio.stopTone();
-    Serial.println("[Switchboard] ⏸️ Call placed on HOLD. Caller hearing hold tone.");
-  } else if (strcmp(type, "call_ended") == 0) {
-    m_callState = STATE_IDLE;
-    BellRinger.stopRing();
-    Audio.stopTone();
-    Serial.println("[Switchboard] Call Ended.");
   } else if (strcmp(type, "test_ring") == 0) {
     const char* ringStyle = doc["ringStyle"] | "traditional";
     const char* ringCadence = doc["cadence"] | "2000,4000";
@@ -216,18 +180,6 @@ void NetworkClientManager::sendHookFlash() {
   Serial.println("[WebSocket] ⚡ Sent Hook Flash (Call Hold / Transfer Request) to switchboard.");
 }
 
-void NetworkClientManager::sendDialDigit(char digit) {
-  if (!m_isConnected) return;
-  DeviceConfig config = Provisioning.getConfig();
-  JsonDocument doc;
-  doc["type"] = "dial_digit";
-  doc["deviceId"] = config.deviceId;
-  doc["digit"] = String(digit);
-
-  String jsonOut;
-  serializeJson(doc, jsonOut);
-  m_webSocket.sendTXT(jsonOut);
-}
 
 void NetworkClientManager::sendCallAnswer() {
   if (!m_isConnected) return;

@@ -1020,55 +1020,6 @@ export const AdminDashboardPage: React.FC = () => {
             <Sliders size={18} color="var(--accent-cyan)" /> System Settings & Phone Policy
           </h3>
 
-          <div className="grid-2">
-            <div className="form-group">
-              <label className="form-label">Application Branding Name</label>
-              <input
-                type="text"
-                className="form-input"
-                value={settings.app_name || ''}
-                onChange={(e) => setSettings({ ...settings, app_name: e.target.value })}
-              />
-            </div>
-
-            <div className="form-group">
-              <label className="form-label">Custom Logo Image (PNG / SVG)</label>
-              <input
-                type="file"
-                accept="image/png,image/svg+xml"
-                onChange={(e) => setLogoFile(e.target.files?.[0] || null)}
-                style={{ color: 'var(--text-muted)' }}
-              />
-            </div>
-
-            <div className="form-group">
-              <label className="form-label">Extension Digits Length</label>
-              <select
-                className="form-select"
-                value={settings.phone_number_length || '3'}
-                onChange={(e) => setSettings({ ...settings, phone_number_length: e.target.value })}
-              >
-                <option value="2">2 Digits (10-99)</option>
-                <option value="3">3 Digits (100-999)</option>
-                <option value="4">4 Digits (1000-9999)</option>
-                <option value="5">5 Digits (10000-99999)</option>
-                <option value="7">7 Digits (Standard Local Phone Number)</option>
-              </select>
-            </div>
-
-            <div className="form-group">
-              <label className="form-label">Area Code Support</label>
-              <select
-                className="form-select"
-                value={settings.area_code_enabled || 'false'}
-                onChange={(e) => setSettings({ ...settings, area_code_enabled: e.target.value })}
-              >
-                <option value="false">Disabled (Extension Only)</option>
-                <option value="true">Enabled (Area Code + Extension)</option>
-              </select>
-            </div>
-          </div>
-
           {/* SMTP Outbound Mail Dispatcher Configuration */}
           <div style={{ borderTop: '1px solid var(--border-subtle)', paddingTop: '1.5rem', display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
             <div>

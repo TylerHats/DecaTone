@@ -8,6 +8,7 @@ import { runMigrations } from './db/migrations';
 import { queryOne, execute } from './db/connection';
 import { phoneSwitchService } from './services/phoneSwitchService';
 import { initBackupScheduler } from './services/backupScheduler';
+import { homeAssistantMqttService } from './services/homeAssistantMqttService';
 
 import authRoutes from './routes/authRoutes';
 import phoneRoutes from './routes/phoneRoutes';
@@ -220,11 +221,10 @@ if (fs.existsSync(frontendDist)) {
 // Start Server
 async function startServer() {
   try {
-    console.log('Initializing DecaTone database migrations...');
     await runMigrations();
 
-    // Initialize automated scheduled backup daemon
-    initBackupScheduler();
+    // Initialize Automated Scheduled Database Backups
+    await initBackupScheduler();
 
     // Auto-sync DB installed_version with current package.json version
     try {
@@ -236,6 +236,9 @@ async function startServer() {
         }
       }
     } catch (e) {}
+
+    // Initialize Home Assistant MQTT client
+    await homeAssistantMqttService.init();
 
     const certPath = process.env.SSL_CERT || path.join(dataDir, 'cert.pem');
     const keyPath = process.env.SSL_KEY || path.join(dataDir, 'key.pem');

@@ -11,7 +11,9 @@ export const SetupWizardPage: React.FC = () => {
   const [password, setPassword] = useState('');
   const [displayName, setDisplayName] = useState('System Administrator');
   const [appNameInput, setAppNameInput] = useState('DecaTone');
-  const [phoneNumberLength, setPhoneNumberLength] = useState('3');
+  const [phoneNumberMinLength, setPhoneNumberMinLength] = useState('4');
+  const [phoneNumberMaxLength, setPhoneNumberMaxLength] = useState('4');
+  const [assignmentMode, setAssignmentMode] = useState('user_choice');
   const [error, setError] = useState('');
   const [submitting, setSubmitting] = useState(false);
 
@@ -29,7 +31,10 @@ export const SetupWizardPage: React.FC = () => {
           password,
           displayName,
           appName: appNameInput,
-          phoneNumberLength
+          phoneNumberLength: phoneNumberMinLength,
+          phoneNumberMinLength,
+          phoneNumberMaxLength,
+          assignmentMode
         })
       });
 
@@ -47,7 +52,7 @@ export const SetupWizardPage: React.FC = () => {
   };
 
   return (
-    <div style={{ maxWidth: '520px', margin: '3rem auto', width: '100%' }}>
+    <div style={{ maxWidth: '560px', margin: '3rem auto', width: '100%' }}>
       <div className="glass-card highlight-cyan" style={{ padding: '2.5rem 2rem' }}>
         <div style={{ textAlign: 'center', marginBottom: '2rem' }}>
           <img
@@ -57,7 +62,7 @@ export const SetupWizardPage: React.FC = () => {
             onError={(e) => { (e.target as HTMLImageElement).src = '/assets/logo.png'; }}
           />
           <h1 style={{ fontSize: '1.75rem', marginBottom: '0.25rem' }}>Welcome to DecaTone</h1>
-          <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem' }}>Initial Setup: Create the master administrator account</p>
+          <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem' }}>Initial Setup: Create master administrator & dial plan</p>
         </div>
 
         {error && (
@@ -110,32 +115,64 @@ export const SetupWizardPage: React.FC = () => {
             />
           </div>
 
-          <div className="grid-2" style={{ marginTop: '1rem', borderTop: '1px solid var(--border-subtle)', paddingTop: '1rem' }}>
-            <div className="form-group">
-              <label className="form-label">App Title</label>
-              <input
-                type="text"
-                className="form-input"
-                value={appNameInput}
-                onChange={(e) => setAppNameInput(e.target.value)}
-              />
-            </div>
+          <div style={{ marginTop: '1.5rem', borderTop: '1px solid var(--border-subtle)', paddingTop: '1.25rem' }}>
+            <h4 style={{ fontSize: '0.95rem', color: '#38bdf8', marginBottom: '1rem' }}>Dial Plan & Number Policy</h4>
 
-            <div className="form-group">
-              <label className="form-label">Extension Length</label>
-              <select
-                className="form-select"
-                value={phoneNumberLength}
-                onChange={(e) => setPhoneNumberLength(e.target.value)}
-              >
-                <option value="3">3 Digits (100-999)</option>
-                <option value="4">4 Digits (1000-9999)</option>
-                <option value="5">5 Digits (10000-99999)</option>
-              </select>
+            <div className="grid-2">
+              <div className="form-group">
+                <label className="form-label">App Branding Title</label>
+                <input
+                  type="text"
+                  className="form-input"
+                  value={appNameInput}
+                  onChange={(e) => setAppNameInput(e.target.value)}
+                />
+              </div>
+
+              <div className="form-group">
+                <label className="form-label">Assignment Policy</label>
+                <select
+                  className="form-select"
+                  value={assignmentMode}
+                  onChange={(e) => setAssignmentMode(e.target.value)}
+                >
+                  <option value="user_choice">User Choice (Sign up pick)</option>
+                  <option value="fixed_random">Fully Random (Fixed length)</option>
+                  <option value="sequential">Sequential Auto-Allocate</option>
+                </select>
+              </div>
+
+              <div className="form-group">
+                <label className="form-label">Min Extension Length</label>
+                <select
+                  className="form-select"
+                  value={phoneNumberMinLength}
+                  onChange={(e) => setPhoneNumberMinLength(e.target.value)}
+                >
+                  <option value="3">3 Digits (100-999)</option>
+                  <option value="4">4 Digits (1000-9999)</option>
+                  <option value="5">5 Digits (10000-99999)</option>
+                  <option value="7">7 Digits (Standard Local)</option>
+                </select>
+              </div>
+
+              <div className="form-group">
+                <label className="form-label">Max Extension Length</label>
+                <select
+                  className="form-select"
+                  value={phoneNumberMaxLength}
+                  onChange={(e) => setPhoneNumberMaxLength(e.target.value)}
+                >
+                  <option value="3">3 Digits (100-999)</option>
+                  <option value="4">4 Digits (1000-9999)</option>
+                  <option value="5">5 Digits (10000-99999)</option>
+                  <option value="7">7 Digits (Standard Local)</option>
+                </select>
+              </div>
             </div>
           </div>
 
-          <button type="submit" disabled={submitting} className="btn btn-primary btn-lg" style={{ width: '100%', marginTop: '1rem' }}>
+          <button type="submit" disabled={submitting} className="btn btn-primary btn-lg" style={{ width: '100%', marginTop: '1.5rem' }}>
             {submitting ? 'Initializing Switchboard...' : 'Initialize DecaTone System'}
           </button>
         </form>

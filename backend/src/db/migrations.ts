@@ -151,7 +151,7 @@ export async function runMigrations() {
       logo_url: '/branding/logo.png',
       installed_version: '1.0.0',
       update_channel: 'stable',
-      phone_number_length: '3',
+      phone_number_length: '4',
       area_code_enabled: 'false',
       area_codes_list: '555,212,312,415,800',
       default_area_code: '555',
@@ -306,7 +306,6 @@ This system is self-hosted and **never sells or shares your personal information
 
   if (currentVersion < 5) {
     console.log('Running Migration 5: Adding Advanced Telephony & Hardware Tuning...');
-
     try {
       await execute(`ALTER TABLE phones ADD COLUMN hardware_profile TEXT DEFAULT 'western_electric_500'`);
     } catch (e) {}
@@ -323,7 +322,100 @@ This system is self-hosted and **never sells or shares your personal information
     await execute('INSERT INTO schema_migrations (version) VALUES (5)');
     console.log('Migration 5 applied successfully.');
   }
+
+  if (currentVersion < 6) {
+    console.log('Running Migration 6: Adding Range, Assignment Mode, Call Forwarding & MQTT Settings...');
+    try {
+      await execute(`ALTER TABLE phones ADD COLUMN call_forwarding_enabled INTEGER DEFAULT 0`);
+    } catch (e) {}
+    try {
+      await execute(`ALTER TABLE phones ADD COLUMN forward_to_number TEXT`);
+    } catch (e) {}
+    try {
+      await execute(`ALTER TABLE system_settings ADD COLUMN number_min_length INTEGER DEFAULT 4`);
+    } catch (e) {}
+    try {
+      await execute(`ALTER TABLE system_settings ADD COLUMN number_max_length INTEGER DEFAULT 4`);
+    } catch (e) {}
+    try {
+      await execute(`ALTER TABLE system_settings ADD COLUMN assignment_mode TEXT DEFAULT 'user_choice'`);
+    } catch (e) {}
+    try {
+      await execute(`ALTER TABLE system_settings ADD COLUMN mqtt_enabled INTEGER DEFAULT 0`);
+    } catch (e) {}
+    try {
+      await execute(`ALTER TABLE system_settings ADD COLUMN mqtt_broker_url TEXT DEFAULT 'mqtt://localhost:1883'`);
+    } catch (e) {}
+    try {
+      await execute(`ALTER TABLE system_settings ADD COLUMN mqtt_username TEXT`);
+    } catch (e) {}
+    try {
+      await execute(`ALTER TABLE system_settings ADD COLUMN mqtt_password TEXT`);
+    } catch (e) {}
+    try {
+      await execute(`ALTER TABLE system_settings ADD COLUMN mqtt_ha_pin TEXT DEFAULT '411'`);
+    } catch (e) {}
+    try {
+      await execute(`
+        CREATE TABLE IF NOT EXISTS pending_device_enrollments (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          device_id TEXT UNIQUE NOT NULL,
+          ip_address TEXT,
+          pairing_code_word TEXT NOT NULL,
+          pairing_code_numeric TEXT NOT NULL,
+          created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+      `);
+    } catch (e) {}
+
+    await execute('INSERT INTO schema_migrations (version) VALUES (6)');
+    console.log('Migration 6 applied successfully.');
+  }
+
+  if (currentVersion < 7) {
+    console.log('Running Migration 7: Adding Per-Friend Distinctive Ringing, VIP Status & DND Schedules...');
+    // Friend Distinctive Ringing & VIP
+    try {
+      await execute(`ALTER TABLE friends ADD COLUMN ring_style TEXT DEFAULT 'default'`);
+    } catch (e) {}
+    try {
+      await execute(`ALTER TABLE friends ADD COLUMN ring_cadence_custom TEXT`);
+    } catch (e) {}
+    try {
+      await execute(`ALTER TABLE friends ADD COLUMN is_vip INTEGER DEFAULT 0`);
+    } catch (e) {}
+
+    // User DND Settings & Schedules
+    try {
+      await execute(`ALTER TABLE users ADD COLUMN dnd_manual_state INTEGER DEFAULT 0`);
+    } catch (e) {}
+    try {
+      await execute(`ALTER TABLE users ADD COLUMN dnd_schedule_enabled INTEGER DEFAULT 0`);
+    } catch (e) {}
+    try {
+      await execute(`ALTER TABLE users ADD COLUMN dnd_schedule_start TEXT DEFAULT '22:00'`);
+    } catch (e) {}
+    try {
+      await execute(`ALTER TABLE users ADD COLUMN dnd_schedule_end TEXT DEFAULT '08:00'`);
+    } catch (e) {}
+    try {
+      await execute(`ALTER TABLE users ADD COLUMN dnd_schedule_days TEXT DEFAULT '1,2,3,4,5,6,7'`);
+    } catch (e) {}
+    try {
+      await execute(`ALTER TABLE users ADD COLUMN dnd_override_period TEXT`);
+    } catch (e) {}
+
+    await execute('INSERT INTO schema_migrations (version) VALUES (7)');
+    console.log('Migration 7 applied successfully.');
+  }
+
+  if (currentVersion < 8) {
+    console.log('Running Migration 8: Adding DND Repeated Call Emergency Breakthrough...');
+    try {
+      await execute(`ALTER TABLE users ADD COLUMN dnd_repeated_call_breakthrough INTEGER DEFAULT 1`);
+    } catch (e) {}
+
+    await execute('INSERT INTO schema_migrations (version) VALUES (8)');
+    console.log('Migration 8 applied successfully.');
+  }
 }
-
-
-

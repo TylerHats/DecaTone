@@ -19,9 +19,9 @@ void AudioTask(void *pvParameters) {
 }
 
 // Callback when user dials a digit on the rotary dial
-void onDigitDialed(char digit) {
-  Serial.printf("[Main] Rotary Digit Dialed: '%c'\n", digit);
-  NetworkClient.sendDialDigit(digit);
+void onDigitDialed(char digit, float pps, float breakRatio, uint32_t pulseCount) {
+  Serial.printf("[Main] Rotary Digit Dialed: '%c' (%.1f PPS, %.0f%% Break, %u Pulses)\n", digit, pps, breakRatio, pulseCount);
+  NetworkClient.sendDialDigit(digit, pps, breakRatio, pulseCount);
 }
 
 // Callback when user lifts or replaces the handset
@@ -30,33 +30,30 @@ void onHookStateChanged(bool isOffHook) {
   NetworkClient.sendHookState(isOffHook);
 }
 
-// Callback when user performs a hook flash (~300ms tap) for call transfer
+// Callback when hook-flash is detected
 void onHookFlash() {
-  Serial.println("[Main] ⚡ Hook-Flash Detected! Sending call transfer request...");
+  Serial.println("[Main] Hook Flash Detected!");
   NetworkClient.sendHookFlash();
 }
 
 void setup() {
   Serial.begin(115200);
-  delay(1000);
-  Serial.println("\n==================================================");
-  Serial.println(" ☎️  DecaTone ESP32-S3 Firmware Booting");
-  Serial.printf(" Version: %s | Free PSRAM: %d KB\n", FIRMWARE_VERSION, ESP.getFreePsram() / 1024);
-  Serial.println("==================================================");
+  delay(500);
+  Serial.println("\n=============================================");
+  Serial.println("   DecaTone ESP32-S3 Rotary Phone System     ");
+  Serial.printf ("   Firmware Version: %s                      \n", FIRMWARE_VERSION);
+  Serial.println("=============================================");
 
-  // Initialize Subsystems
+  // Initialize Provisioning & NVS Storage
   Provisioning.begin();
-  Audio.begin();
-  BellRinger.begin();
-  OtaUpdater.begin();
 
-  // Initialize Rotary Dial & Hook Switch with callbacks
+  // Initialize Hardware Peripherals
+  BellRinger.begin();
+  Audio.begin();
   RotaryDial.begin(onDigitDialed, onHookStateChanged, onHookFlash);
 
-  // If already provisioned, connect to WiFi & Switchboard WebSocket
-  if (!Provisioning.isSetupActive()) {
-    NetworkClient.begin();
-  }
+  // Initialize Networking & WebSocket
+  NetworkClient.begin();
 
   // Create dedicated FreeRTOS Audio Task on Core 1
   xTaskCreatePinnedToCore(

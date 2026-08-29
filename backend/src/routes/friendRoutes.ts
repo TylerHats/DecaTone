@@ -5,27 +5,6 @@ import { authenticateToken, AuthenticatedRequest } from '../middleware/authMiddl
 const router = Router();
 router.use(authenticateToken);
 
-// List Accepted Friends
-router.get('/', async (req: AuthenticatedRequest, res: Response) => {
-  try {
-    const currentUserId = req.user!.id;
-    const friends = await query<any>(
-      `SELECT u.id, u.username, u.display_name, u.phone_number, u.area_code, u.avatar_url,
-              p.is_online, p.hook_state, p.call_state,
-              f.created_at as friendship_date
-       FROM friends f
-       JOIN users u ON (u.id = CASE WHEN f.user_id = ? THEN f.friend_id ELSE f.user_id END)
-       LEFT JOIN phones p ON p.user_id = u.id
-       WHERE (f.user_id = ? OR f.friend_id = ?) AND f.status = 'accepted'
-       ORDER BY u.display_name ASC, u.username ASC`,
-      [currentUserId, currentUserId, currentUserId]
-    );
-
-    return res.json({ friends });
-  } catch (err) {
-    return res.status(500).json({ error: 'Failed to list friends' });
-  }
-});
 
 // List Incoming and Outgoing Friend Requests
 router.get('/requests', async (req: AuthenticatedRequest, res: Response) => {

@@ -1,12 +1,169 @@
-import { Router, Response } from 'express';
+import { Router, Request, Response } from 'express';
 import { execute, query, queryOne } from '../db/connection';
 import { authenticateToken, AuthenticatedRequest } from '../middleware/authMiddleware';
 import { phoneSwitchService } from '../services/phoneSwitchService';
 
 const router = Router();
+
+const ENROLLMENT_WORDS = ['TONE', 'CALL', 'DIAL', 'RING', 'BELL', 'CORD', 'VINTAGE'];
+
+// Public Enrollment Endpoint: Called by ESP32-S3 during OOBE Setup or boot
+router.post('/enroll', async (req: Request, res: Response) => {
+  try {
+    const { deviceId, mac, hardwareProfile, bellFrequencyHz } = req.body;
+    if (!deviceId) {
+      return res.status(400).json({ error: 'Device ID is required' });
+    }
+
+    const cleanDeviceId = deviceId.trim().toUpperCase();
+    const ip = (req.headers['x-forwarded-for'] as string)?.split(',')[0] || req.socket.remoteAddress || '127.0.0.1';
+
+    // Check if device is already paired to a user
+    const existingPhone = await queryOne<any>('SELECT * FROM phones WHERE device_id = ?', [cleanDeviceId]);
+    if (existingPhone && existingPhone.user_id) {
+      return res.json({
+        isPaired: true,
+        deviceId: cleanDeviceId,
+        message: 'Device already paired'
+      });
+    }
+
+    // Check if there is an active pending enrollment code for this device
+    let pending = await queryOne<any>(
+      'SELECT * FROM pending_device_enrollments WHERE device_id = ? AND expires_at > datetime("now")',
+      [cleanDeviceId]
+    );
+
+    if (!pending) {
+      // Pick a randomized word prefix and 4-digit code
+      const wordPrefix = ENROLLMENT_WORDS[Math.floor(Math.random() * ENROLLMENT_WORDS.length)];
+      const numericCode = String(Math.floor(1000 + Math.random() * 9000));
+      const pairingCode = `${wordPrefix} ${numericCode}`;
+
+      await execute('DELETE FROM pending_device_enrollments WHERE device_id = ?', [cleanDeviceId]);
+      await execute(
+        `INSERT INTO pending_device_enrollments (device_id, word_prefix, numeric_code, pairing_code, mac_address, ip_address, hardware_profile, bell_frequency_hz, expires_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now', '+24 hours'))`,
+        [cleanDeviceId, wordPrefix, numericCode, pairingCode, mac || '', ip, hardwareProfile || 'western_electric_500', bellFrequencyHz || 20.0]
+      );
+
+      pending = await queryOne<any>('SELECT * FROM pending_device_enrollments WHERE device_id = ?', [cleanDeviceId]);
+    }
+
+    // Ensure phone record exists
+    if (!existingPhone) {
+      await execute(
+        `INSERT INTO phones (device_id, mac_address, ip_address, hardware_profile, bell_frequency_hz, is_online, last_seen)
+         VALUES (?, ?, ?, ?, ?, 1, CURRENT_TIMESTAMP)`,
+        [cleanDeviceId, mac || '', ip, hardwareProfile || 'western_electric_500', bellFrequencyHz || 20.0]
+      );
+    }
+
+    return res.json({
+      isPaired: false,
+      deviceId: cleanDeviceId,
+      wordPrefix: pending.word_prefix,
+      numericCode: pending.numeric_code,
+      pairingCode: pending.pairing_code,
+      expiresAt: pending.expires_at
+    });
+  } catch (err: any) {
+    console.error('Phone enrollment error:', err);
+    return res.status(500).json({ error: 'Failed to enroll phone' });
+  }
+});
+
+// Authenticated Routes
 router.use(authenticateToken);
 
-// Claim / Pair an ESP32-S3 Device
+// Claim / Pair an ESP32-S3 Device by Word + Number Pairing Code
+router.post('/claim-by-code', async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const { wordPrefix, numericCode, pairingCode } = req.body;
+    let targetCode = '';
+
+    if (pairingCode) {
+      targetCode = pairingCode.trim().toUpperCase();
+    } else if (wordPrefix && numericCode) {
+      targetCode = `${wordPrefix.trim().toUpperCase()} ${numericCode.trim()}`;
+    } else {
+      return res.status(400).json({ error: 'Word and numeric code are required' });
+    }
+
+    const pending = await queryOne<any>(
+      'SELECT * FROM pending_device_enrollments WHERE pairing_code = ? AND expires_at > datetime("now")',
+      [targetCode]
+    );
+
+    if (!pending) {
+      return res.status(404).json({ error: 'Invalid or expired pairing code. Check the code spoken on your handset.' });
+    }
+
+    const cleanDeviceId = pending.device_id;
+
+    // Check if current user already has another phone paired
+    await execute('UPDATE phones SET user_id = NULL WHERE user_id = ?', [req.user!.id]);
+
+    // Assign phone to this user
+    await execute(
+      'UPDATE phones SET user_id = ?, paired_at = CURRENT_TIMESTAMP WHERE device_id = ?',
+      [req.user!.id, cleanDeviceId]
+    );
+
+    // Delete pending enrollment entry
+    await execute('DELETE FROM pending_device_enrollments WHERE device_id = ?', [cleanDeviceId]);
+
+    const phone = await queryOne<any>('SELECT * FROM phones WHERE device_id = ?', [cleanDeviceId]);
+
+    phoneSwitchService.pushDeviceSettings(cleanDeviceId, {
+      earpieceVolume: phone?.earpiece_volume || 80,
+      micSensitivity: phone?.mic_sensitivity || 80,
+      ringStyle: phone?.ring_style || 'traditional',
+      ringCadence: phone?.ring_cadence_custom || '2000,4000'
+    });
+
+    return res.json({
+      message: 'Telephone paired successfully to your account!',
+      phone: {
+        deviceId: cleanDeviceId,
+        isOnline: !!phone?.is_online,
+        firmwareVersion: phone?.firmware_version || '1.2.0',
+        hardwareProfile: phone?.hardware_profile || 'western_electric_500'
+      }
+    });
+  } catch (err: any) {
+    console.error('Claim by code error:', err);
+    return res.status(500).json({ error: 'Failed to pair phone by code' });
+  }
+});
+
+// Bell Frequency Resonance Sweep Calibration
+router.post('/resonance-sweep', async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const { frequencyHz, durationMs } = req.body;
+    const phone = await queryOne<any>('SELECT * FROM phones WHERE user_id = ?', [req.user!.id]);
+    if (!phone) {
+      return res.status(404).json({ error: 'No phone paired to this account' });
+    }
+
+    const freq = parseFloat(frequencyHz) || 20.0;
+    const dur = parseInt(durationMs, 10) || 3000;
+
+    // Push sweep frequency and trigger test ring
+    phoneSwitchService.pushDeviceSettings(phone.device_id, { bellFrequencyHz: freq });
+    phoneSwitchService.sendTestRing(phone.device_id, phone.ring_style || 'traditional', '2000,4000');
+
+    return res.json({
+      message: `Resonance test ring sent at ${freq.toFixed(1)} Hz`,
+      frequencyHz: freq,
+      durationMs: dur
+    });
+  } catch (err: any) {
+    return res.status(500).json({ error: 'Failed to trigger resonance sweep' });
+  }
+});
+
+// Legacy Claim / Pair by Device ID
 router.post('/claim', async (req: AuthenticatedRequest, res: Response) => {
   try {
     const { deviceId } = req.body;
@@ -54,7 +211,7 @@ router.post('/claim', async (req: AuthenticatedRequest, res: Response) => {
       phone: {
         deviceId: cleanDeviceId,
         isOnline: !!phone?.is_online,
-        firmwareVersion: phone?.firmware_version || '1.0.0'
+        firmwareVersion: phone?.firmware_version || '1.2.0'
       }
     });
   } catch (err: any) {

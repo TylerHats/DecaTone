@@ -235,7 +235,7 @@ export const RegisterPage: React.FC = () => {
               className="form-input"
               value={email}
               onChange={(e) => setEmail(e.target.value)}
-              placeholder="e.g. you@example.com (for password recovery & notifications)"
+              placeholder="e.g. you@example.com (for password recovery & alerts)"
             />
             <span style={{ fontSize: '0.75rem', color: 'var(--text-dim)' }}>
               Used for password resets and optional voicemail/missed call alerts.
@@ -270,7 +270,7 @@ export const RegisterPage: React.FC = () => {
                   value={requestedAreaCode}
                   onChange={(e) => setRequestedAreaCode(e.target.value)}
                 >
-                  {numberConfig.allowedAreaCodes.map((ac: string) => (
+                  {numberConfig.allowedAreaCodes?.map((ac: string) => (
                     <option key={ac} value={ac}>({ac})</option>
                   ))}
                 </select>
@@ -283,12 +283,14 @@ export const RegisterPage: React.FC = () => {
                 readOnly={!numberConfig?.allowUserChoice}
                 value={requestedNumber}
                 onChange={(e) => setRequestedNumber(e.target.value.replace(/\D/g, ''))}
-                placeholder={numberConfig ? `${numberConfig.numberLength} digits` : '101'}
+                placeholder={numberConfig ? (numberConfig.minNumberLength === numberConfig.maxNumberLength ? `${numberConfig.minNumberLength} digits` : `${numberConfig.minNumberLength}–${numberConfig.maxNumberLength} digits`) : '1000'}
                 style={{ fontFamily: 'var(--font-mono)', fontWeight: '700', letterSpacing: '0.05em' }}
               />
             </div>
             <span style={{ fontSize: '0.75rem', color: 'var(--text-dim)' }}>
-              This is the extension other users dial on their rotary phones to call you.
+              {numberConfig?.minNumberLength !== numberConfig?.maxNumberLength
+                ? `Choose a number between ${numberConfig?.minNumberLength} and ${numberConfig?.maxNumberLength} digits. Other users dial this to call you.`
+                : 'This is the extension other users dial on their rotary phones to call you.'}
             </span>
           </div>
 
