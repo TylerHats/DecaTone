@@ -9,7 +9,8 @@ enum CallState {
   STATE_IDLE = 0,
   STATE_DIALING,
   STATE_RINGING,
-  STATE_IN_CALL
+  STATE_IN_CALL,
+  STATE_ON_HOLD
 };
 
 class NetworkClientManager {
@@ -18,6 +19,7 @@ public:
   void update();
 
   void sendHookState(bool isOffHook);
+  void sendHookFlash();
   void sendDialDigit(char digit);
   void sendCallAnswer();
   void sendCallHangup();

@@ -73,6 +73,18 @@ bool BellRingerManager::isRinging() const {
   return m_isRinging;
 }
 
+void BellRingerManager::setRingFrequency(float freqHz) {
+  if (freqHz >= 10.0f && freqHz <= 60.0f) {
+    m_frequencyHz = freqHz;
+    m_halfPeriodUs = (uint32_t)(1000000.0f / (freqHz * 2.0f));
+    Serial.printf("[Bell] Bell AC ringing frequency set to %.1f Hz (half-period: %u us)\n", m_frequencyHz, m_halfPeriodUs);
+  }
+}
+
+float BellRingerManager::getRingFrequency() const {
+  return m_frequencyHz;
+}
+
 void BellRingerManager::update() {
   if (!m_isRinging) return;
 
@@ -90,11 +102,10 @@ void BellRingerManager::update() {
     }
   }
 
-  // Generate 20Hz AC resonance switching on IRF640N MOSFET gate during ON phase
-  // 20Hz period = 50ms = 25ms HIGH (25000us) / 25ms LOW (25000us)
+  // Generate AC resonance switching on IRF640N MOSFET gate during ON phase
   if (m_bellStateOn) {
     uint32_t nowUs = micros();
-    if (nowUs - m_lastOscillatorTime >= 25000) {
+    if (nowUs - m_lastOscillatorTime >= m_halfPeriodUs) {
       m_oscillatorState = !m_oscillatorState;
       digitalWrite(PIN_BELL_RINGER, m_oscillatorState ? HIGH : LOW);
       m_lastOscillatorTime = nowUs;

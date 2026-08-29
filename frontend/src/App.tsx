@@ -16,6 +16,9 @@ import { FriendsPage } from './pages/FriendsPage';
 import { VoicemailPage } from './pages/VoicemailPage';
 import { AdminDashboardPage } from './pages/AdminDashboardPage';
 import { SetupWizardPage } from './pages/SetupWizardPage';
+import { LegalPage } from './pages/LegalPages';
+import { ForgotPasswordPage } from './pages/ForgotPasswordPage';
+import { ResetPasswordPage } from './pages/ResetPasswordPage';
 
 const ProtectedRoute: React.FC<{ children: React.ReactNode; requireAdmin?: boolean }> = ({ children, requireAdmin }) => {
   const { user, loading } = useAuth();
@@ -65,6 +68,10 @@ const AppContent: React.FC = () => {
           <Route path="/setup" element={<SetupWizardPage />} />
           <Route path="/login" element={<LoginPage />} />
           <Route path="/register" element={<RegisterPage />} />
+          <Route path="/forgot-password" element={<ForgotPasswordPage />} />
+          <Route path="/reset-password" element={<ResetPasswordPage />} />
+          <Route path="/terms" element={<LegalPage />} />
+          <Route path="/privacy" element={<LegalPage />} />
 
           <Route
             path="/"

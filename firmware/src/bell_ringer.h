@@ -11,13 +11,18 @@ public:
   void stopRing();
   bool isRinging() const;
 
+  void setRingFrequency(float freqHz);
+  float getRingFrequency() const;
+
 private:
   bool m_isRinging = false;
   uint32_t m_patternIndex = 0;
   uint32_t m_lastPhaseTime = 0;
   bool m_bellStateOn = false;
 
-  // 20Hz AC Sub-oscillator for MOSFET gate pulsing
+  // Dynamic PWM AC sub-oscillator for MOSFET gate pulsing
+  float m_frequencyHz = DEFAULT_BELL_FREQ_HZ;
+  uint32_t m_halfPeriodUs = 25000;
   uint32_t m_lastOscillatorTime = 0;
   bool m_oscillatorState = false;
 

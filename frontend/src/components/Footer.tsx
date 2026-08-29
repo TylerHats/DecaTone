@@ -20,9 +20,10 @@ export const Footer: React.FC = () => {
           <span>{appName} &copy; {new Date().getFullYear()} &mdash; Open-Source Rotary Phone VoIP Switch</span>
         </div>
         <div style={{ display: 'flex', gap: '1.25rem' }}>
-          <a href="/onboarding" style={{ color: 'var(--text-muted)' }}>Pair Hardware</a>
+          <a href="/terms" style={{ color: 'var(--text-muted)' }}>Terms & 911 Notice</a>
+          <a href="/privacy" style={{ color: 'var(--text-muted)' }}>Privacy Policy</a>
           <a href="/settings" style={{ color: 'var(--text-muted)' }}>Audio Settings</a>
-          <a href="https://github.com/TylerHats/DecaTone" target="_blank" rel="noreferrer" style={{ color: 'var(--text-muted)' }}>GitHub Repository</a>
+          <a href="https://github.com/TylerHats/DecaTone" target="_blank" rel="noreferrer" style={{ color: 'var(--text-muted)' }}>GitHub</a>
         </div>
       </div>
     </footer>

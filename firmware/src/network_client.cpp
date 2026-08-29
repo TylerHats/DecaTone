@@ -73,7 +73,7 @@ void NetworkClientManager::handleWebSocketEvent(WStype_t type, uint8_t* payload,
       m_isConnected = true;
       Serial.println("[WebSocket] Connected to DecaTone telephone switchboard!");
 
-      // Send registration handshake
+      // Send registration handshake with hardware builder specifications
       DeviceConfig config = Provisioning.getConfig();
       JsonDocument doc;
       doc["type"] = "register";
@@ -81,6 +81,9 @@ void NetworkClientManager::handleWebSocketEvent(WStype_t type, uint8_t* payload,
       doc["mac"] = WiFi.macAddress();
       doc["firmwareVersion"] = FIRMWARE_VERSION;
       doc["rssi"] = WiFi.RSSI();
+      doc["hardwareProfile"] = config.hardwareProfile;
+      doc["bellFrequencyHz"] = config.bellFrequencyHz;
+      doc["hookFlashEnabled"] = config.hookFlashEnabled;
 
       String jsonOut;
       serializeJson(doc, jsonOut);
@@ -122,6 +125,9 @@ void NetworkClientManager::handleJsonCommand(const JsonDocument& doc) {
     Serial.println("[Switchboard] Registration confirmed by switchboard!");
     if (doc["earpieceVolume"].is<int>()) Audio.setSpeakerVolume(doc["earpieceVolume"]);
     if (doc["micSensitivity"].is<int>()) Audio.setMicSensitivity(doc["micSensitivity"]);
+    if (doc["audioProfile"].is<const char*>()) Audio.setAudioProfile(doc["audioProfile"].as<String>());
+    if (doc["sidetoneLevel"].is<int>()) Audio.setSidetoneLevel(doc["sidetoneLevel"]);
+    if (doc["bellFrequencyHz"].is<float>()) BellRinger.setRingFrequency(doc["bellFrequencyHz"].as<float>());
   } else if (strcmp(type, "play_tone") == 0) {
     const char* tone = doc["tone"];
     if (strcmp(tone, "dial") == 0) {
@@ -135,10 +141,11 @@ void NetworkClientManager::handleJsonCommand(const JsonDocument& doc) {
     }
   } else if (strcmp(type, "stop_tone") == 0) {
     Audio.stopTone();
-  } else if (strcmp(type, "incoming_call") == 0) {
+  } else if (strcmp(type, "incoming_call") == 0 || strcmp(type, "intercom_incoming") == 0) {
     m_callState = STATE_RINGING;
     const char* ringStyle = doc["ringStyle"] | "traditional";
-    const char* ringCadence = doc["ringCadence"] | "2000,4000";
+    const char* ringCadence = doc["ringCadence"] | (strcmp(type, "intercom_incoming") == 0 ? "300,300" : "2000,4000");
+    if (doc["bellFrequencyHz"].is<float>()) BellRinger.setRingFrequency(doc["bellFrequencyHz"].as<float>());
     BellRinger.startRing(ringStyle, ringCadence);
   } else if (strcmp(type, "stop_ring") == 0) {
     BellRinger.stopRing();
@@ -148,6 +155,10 @@ void NetworkClientManager::handleJsonCommand(const JsonDocument& doc) {
     Audio.stopTone();
     m_sessionKey = doc["sessionKey"].as<String>();
     Serial.println("[Switchboard] Call Connected. Two-way encrypted audio stream active.");
+  } else if (strcmp(type, "call_on_hold") == 0) {
+    m_callState = STATE_ON_HOLD;
+    Audio.stopTone();
+    Serial.println("[Switchboard] ⏸️ Call placed on HOLD. Caller hearing hold tone.");
   } else if (strcmp(type, "call_ended") == 0) {
     m_callState = STATE_IDLE;
     BellRinger.stopRing();
@@ -156,6 +167,7 @@ void NetworkClientManager::handleJsonCommand(const JsonDocument& doc) {
   } else if (strcmp(type, "test_ring") == 0) {
     const char* ringStyle = doc["ringStyle"] | "traditional";
     const char* ringCadence = doc["cadence"] | "2000,4000";
+    if (doc["bellFrequencyHz"].is<float>()) BellRinger.setRingFrequency(doc["bellFrequencyHz"].as<float>());
     BellRinger.startRing(ringStyle, ringCadence);
     uint32_t durationMs = doc["durationMs"] | 6000;
     delay(durationMs);
@@ -167,6 +179,9 @@ void NetworkClientManager::handleJsonCommand(const JsonDocument& doc) {
   } else if (strcmp(type, "apply_settings") == 0) {
     if (doc["earpieceVolume"].is<int>()) Audio.setSpeakerVolume(doc["earpieceVolume"]);
     if (doc["micSensitivity"].is<int>()) Audio.setMicSensitivity(doc["micSensitivity"]);
+    if (doc["audioProfile"].is<const char*>()) Audio.setAudioProfile(doc["audioProfile"].as<String>());
+    if (doc["sidetoneLevel"].is<int>()) Audio.setSidetoneLevel(doc["sidetoneLevel"]);
+    if (doc["bellFrequencyHz"].is<float>()) BellRinger.setRingFrequency(doc["bellFrequencyHz"].as<float>());
   } else if (strcmp(type, "ota_available") == 0) {
     String binUrl = doc["binaryUrl"].as<String>();
     DeviceConfig config = Provisioning.getConfig();
@@ -186,6 +201,19 @@ void NetworkClientManager::sendHookState(bool isOffHook) {
   String jsonOut;
   serializeJson(doc, jsonOut);
   m_webSocket.sendTXT(jsonOut);
+}
+
+void NetworkClientManager::sendHookFlash() {
+  if (!m_isConnected) return;
+  DeviceConfig config = Provisioning.getConfig();
+  JsonDocument doc;
+  doc["type"] = "hook_flash";
+  doc["deviceId"] = config.deviceId;
+
+  String jsonOut;
+  serializeJson(doc, jsonOut);
+  m_webSocket.sendTXT(jsonOut);
+  Serial.println("[WebSocket] ⚡ Sent Hook Flash (Call Hold / Transfer Request) to switchboard.");
 }
 
 void NetworkClientManager::sendDialDigit(char digit) {

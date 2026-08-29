@@ -11,6 +11,9 @@ struct DeviceConfig {
   String wifiPassword;
   String serverBaseUrl;
   String deviceId;
+  String hardwareProfile;
+  float bellFrequencyHz;
+  bool hookFlashEnabled;
   bool isConfigured;
 };
 
@@ -20,7 +23,7 @@ public:
   void update();
 
   DeviceConfig getConfig();
-  void saveConfig(const String& ssid, const String& pass, const String& serverUrl);
+  void saveConfig(const String& ssid, const String& pass, const String& serverUrl, const String& profile = "western_electric_500", float bellFreq = 20.0f, bool hookFlash = true);
   void resetConfig();
   bool isSetupActive() const;
 

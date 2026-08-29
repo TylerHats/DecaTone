@@ -4,10 +4,13 @@ export interface User {
   id: number;
   username: string;
   displayName?: string;
+  email?: string;
   phoneNumber?: string;
   areaCode?: string;
   role: string;
   callPrivacy?: string;
+  notify_on_voicemail?: number;
+  notify_on_missed_call?: number;
   unreadVoicemails?: number;
 }
 

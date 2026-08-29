@@ -3,6 +3,7 @@ import { useNavigate, Link } from 'react-router-dom';
 import { Phone, Lock, User, Sparkles, Hash } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { useBranding } from '../context/BrandingContext';
+import { LegalModal } from '../components/LegalModal';
 
 export const LoginPage: React.FC = () => {
   const { login } = useAuth();
@@ -83,7 +84,12 @@ export const LoginPage: React.FC = () => {
           </div>
 
           <div className="form-group" style={{ marginBottom: '1.75rem' }}>
-            <label className="form-label">Password</label>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <label className="form-label">Password</label>
+              <Link to="/forgot-password" style={{ fontSize: '0.8rem', color: 'var(--accent-cyan)' }}>
+                Forgot password?
+              </Link>
+            </div>
             <input
               type="password"
               className="form-input"
@@ -115,11 +121,17 @@ export const RegisterPage: React.FC = () => {
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [displayName, setDisplayName] = useState('');
+  const [email, setEmail] = useState('');
   const [requestedNumber, setRequestedNumber] = useState('');
   const [requestedAreaCode, setRequestedAreaCode] = useState('');
   const [numberConfig, setNumberConfig] = useState<any>(null);
   const [error, setError] = useState('');
   const [submitting, setSubmitting] = useState(false);
+
+  const [agreedToTerms, setAgreedToTerms] = useState(false);
+  const [requireTerms, setRequireTerms] = useState(true);
+  const [showLegalModal, setShowLegalModal] = useState(false);
+  const [modalTab, setModalTab] = useState<'terms' | 'privacy'>('terms');
 
   useEffect(() => {
     fetch('/api/auth/number-options')
@@ -128,6 +140,15 @@ export const RegisterPage: React.FC = () => {
         setNumberConfig(data.config);
         if (data.suggestedNumber) setRequestedNumber(data.suggestedNumber);
         if (data.suggestedAreaCode) setRequestedAreaCode(data.suggestedAreaCode);
+      })
+      .catch(() => {});
+
+    fetch('/api/legal/config')
+      .then(res => res.json())
+      .then(data => {
+        if (data.requireTermsOnSignup !== undefined) {
+          setRequireTerms(data.requireTermsOnSignup);
+        }
       })
       .catch(() => {});
   }, []);
@@ -145,6 +166,7 @@ export const RegisterPage: React.FC = () => {
           username,
           password,
           displayName,
+          email: email.trim() || undefined,
           requestedPhoneNumber: requestedNumber,
           requestedAreaCode
         })
@@ -207,6 +229,20 @@ export const RegisterPage: React.FC = () => {
           </div>
 
           <div className="form-group">
+            <label className="form-label">Email Address (Optional)</label>
+            <input
+              type="email"
+              className="form-input"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              placeholder="e.g. you@example.com (for password recovery & notifications)"
+            />
+            <span style={{ fontSize: '0.75rem', color: 'var(--text-dim)' }}>
+              Used for password resets and optional voicemail/missed call alerts.
+            </span>
+          </div>
+
+          <div className="form-group">
             <label className="form-label">Display Name</label>
             <input
               type="text"
@@ -256,7 +292,7 @@ export const RegisterPage: React.FC = () => {
             </span>
           </div>
 
-          <div className="form-group" style={{ marginBottom: '1.75rem' }}>
+          <div className="form-group" style={{ marginBottom: '1.25rem' }}>
             <label className="form-label">Password</label>
             <input
               type="password"
@@ -268,7 +304,42 @@ export const RegisterPage: React.FC = () => {
             />
           </div>
 
-          <button type="submit" disabled={submitting} className="btn btn-amber btn-lg" style={{ width: '100%' }}>
+          {/* Legal Agreement Checkbox */}
+          <div style={{ marginBottom: '1.5rem', display: 'flex', alignItems: 'flex-start', gap: '0.65rem' }}>
+            <input
+              type="checkbox"
+              id="termsCheckbox"
+              required={requireTerms}
+              checked={agreedToTerms}
+              onChange={(e) => setAgreedToTerms(e.target.checked)}
+              style={{ marginTop: '0.25rem', cursor: 'pointer' }}
+            />
+            <label htmlFor="termsCheckbox" style={{ fontSize: '0.8rem', color: 'var(--text-muted)', lineHeight: 1.4, cursor: 'pointer' }}>
+              I agree to the{' '}
+              <button
+                type="button"
+                onClick={() => { setModalTab('terms'); setShowLegalModal(true); }}
+                style={{ background: 'none', border: 'none', color: 'var(--accent-amber)', padding: 0, cursor: 'pointer', textDecoration: 'underline', font: 'inherit' }}
+              >
+                Terms of Service & 911 Disclaimer
+              </button>{' '}
+              and{' '}
+              <button
+                type="button"
+                onClick={() => { setModalTab('privacy'); setShowLegalModal(true); }}
+                style={{ background: 'none', border: 'none', color: 'var(--accent-amber)', padding: 0, cursor: 'pointer', textDecoration: 'underline', font: 'inherit' }}
+              >
+                Privacy Policy
+              </button>.
+            </label>
+          </div>
+
+          <button
+            type="submit"
+            disabled={submitting || (requireTerms && !agreedToTerms)}
+            className="btn btn-amber btn-lg"
+            style={{ width: '100%' }}
+          >
             {submitting ? 'Creating Extension...' : 'Claim Extension & Setup Phone'}
           </button>
         </form>
@@ -277,6 +348,12 @@ export const RegisterPage: React.FC = () => {
           Already have an account? <Link to="/login">Sign In</Link>
         </div>
       </div>
+
+      <LegalModal
+        isOpen={showLegalModal}
+        initialTab={modalTab}
+        onClose={() => setShowLegalModal(false)}
+      />
     </div>
   );
 };

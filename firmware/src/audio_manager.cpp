@@ -10,7 +10,9 @@ void AudioManager::begin() {
   initADC();
   setSpeakerVolume(80);
   setMicSensitivity(80);
-  Serial.println("[Audio] I2S Speaker & ADC Mic Initialized.");
+  setSidetoneLevel(10);
+  setAudioProfile("vintage_pots");
+  Serial.println("[Audio] I2S Speaker & ADC Mic Initialized with DSP Audio Engine.");
 }
 
 void AudioManager::initI2S() {
@@ -47,19 +49,90 @@ void AudioManager::initADC() {
 void AudioManager::setSpeakerVolume(uint8_t volumePercent) {
   m_speakerVolume = constrain(volumePercent, 0, 100);
   m_volumeMultiplier = (float)m_speakerVolume / 100.0f;
+  Serial.printf("[Audio DSP] Speaker Volume: %d%%\n", m_speakerVolume);
 }
 
 void AudioManager::setMicSensitivity(uint8_t gainPercent) {
   m_micSensitivity = constrain(gainPercent, 0, 100);
-  m_gainMultiplier = ((float)m_micSensitivity / 50.0f); // 0.0 to 2.0x gain
+  m_gainMultiplier = ((float)m_micSensitivity / 50.0f); // 0.0 to 2.0x digital gain scaling
+  Serial.printf("[Audio DSP] Mic Sensitivity: %d%%\n", m_micSensitivity);
+}
+
+void AudioManager::setSidetoneLevel(uint8_t sidetonePercent) {
+  m_sidetoneLevel = constrain(sidetonePercent, 0, 30);
+  m_sidetoneMultiplier = (float)m_sidetoneLevel / 100.0f;
+  Serial.printf("[Audio DSP] Sidetone Level: %d%%\n", m_sidetoneLevel);
+}
+
+void AudioManager::setAudioProfile(const String& profileName) {
+  if (profileName == "modern_hd") {
+    m_activeProfile = PROFILE_MODERN_HD;
+    Serial.println("[Audio DSP] Profile: Modern HD (16kHz Wideband Linear)");
+  } else if (profileName == "early_1930s" || profileName == "1930s") {
+    m_activeProfile = PROFILE_1930S_ANTIQUE;
+    Serial.println("[Audio DSP] Profile: 1930s Early Bell (400Hz-2.5kHz Lo-Fi)");
+  } else {
+    m_activeProfile = PROFILE_VINTAGE_POTS;
+    Serial.println("[Audio DSP] Profile: Vintage POTS (300Hz-3.4kHz Carbon Mic)");
+  }
+
+  // Reset filter state buffers
+  m_hp_x1 = m_hp_x2 = m_hp_y1 = m_hp_y2 = 0;
+  m_lp_x1 = m_lp_x2 = m_lp_y1 = m_lp_y2 = 0;
+}
+
+int16_t AudioManager::applyVintageWarmth(int16_t sample, float drive) {
+  // Normalized soft-saturation polynomial: f(x) = x - (x^3)/3
+  float x = (float)sample / 32768.0f * drive;
+  if (x > 1.2f) x = 1.2f;
+  if (x < -1.2f) x = -1.2f;
+  float y = x - (x * x * x) * 0.333f;
+  return (int16_t)constrain(y * 32767.0f, -32768.0f, 32767.0f);
+}
+
+int16_t AudioManager::processDspSample(int16_t inSample) {
+  if (m_activeProfile == PROFILE_MODERN_HD) {
+    return inSample; // Unfiltered wideband audio
+  }
+
+  float x = (float)inSample;
+
+  if (m_activeProfile == PROFILE_VINTAGE_POTS) {
+    // 1. High-pass filter ~300Hz at 16kHz sample rate
+    // y[n] = 0.9449*y[n-1] + 0.9724*(x[n] - x[n-1])
+    float hp_out = 0.9449f * m_hp_y1 + 0.9724f * (x - m_hp_x1);
+    m_hp_x1 = x;
+    m_hp_y1 = hp_out;
+
+    // 2. Low-pass filter ~3400Hz at 16kHz sample rate
+    // y[n] = 0.435*y[n-1] + 0.565*x[n]
+    float lp_out = 0.435f * m_lp_y1 + 0.565f * hp_out;
+    m_lp_y1 = lp_out;
+
+    // 3. Mild Carbon Mic Harmonic Saturation
+    return applyVintageWarmth((int16_t)constrain(lp_out, -32768.0f, 32767.0f), 1.15f);
+  } else if (m_activeProfile == PROFILE_1930S_ANTIQUE) {
+    // 1. High-pass filter ~450Hz
+    float hp_out = 0.918f * m_hp_y1 + 0.959f * (x - m_hp_x1);
+    m_hp_x1 = x;
+    m_hp_y1 = hp_out;
+
+    // 2. Low-pass filter ~2500Hz
+    float lp_out = 0.55f * m_lp_y1 + 0.45f * hp_out;
+    m_lp_y1 = lp_out;
+
+    // 3. Antique Non-linear Carbon Granule Compression
+    return applyVintageWarmth((int16_t)constrain(lp_out, -32768.0f, 32767.0f), 1.55f);
+  }
+
+  return inSample;
 }
 
 void AudioManager::playTone(ToneType tone) {
   m_activeTone = tone;
   m_tonePhase = 0;
   m_lastToneToggleTime = millis();
-  m_toneAudioMuted = false;
-  Serial.printf("[Audio] Playing Tone Type: %d\n", tone);
+  Serial.printf("[Audio] Playing Tone: %d\n", tone);
 }
 
 void AudioManager::stopTone() {
@@ -81,7 +154,8 @@ void AudioManager::generateToneChunk(int16_t* buffer, size_t samples, float f1, 
     float t = (float)(m_tonePhase + i) * dt;
     float s1 = sinf(twoPi * f1 * t);
     float s2 = sinf(twoPi * f2 * t);
-    buffer[i] = (int16_t)((s1 + s2) * 0.5f * amplitude);
+    int16_t rawTone = (int16_t)((s1 + s2) * 0.5f * amplitude);
+    buffer[i] = processDspSample(rawTone);
   }
   m_tonePhase += samples;
 }
@@ -93,11 +167,11 @@ void AudioManager::update() {
   int16_t toneBuffer[AUDIO_BUFFER_SAMPLES];
 
   if (m_activeTone == TONE_DIAL) {
-    // US Dial Tone: 350Hz + 440Hz continuous
+    // Authentic 350Hz + 440Hz Dial Tone
     generateToneChunk(toneBuffer, AUDIO_BUFFER_SAMPLES, 350.0f, 440.0f);
     writeSpeakerSamples(toneBuffer, AUDIO_BUFFER_SAMPLES);
   } else if (m_activeTone == TONE_RINGBACK) {
-    // Ringback Tone: 440Hz + 480Hz (2s On, 4s Off)
+    // 440Hz + 480Hz Ringback Tone (2s on / 4s off)
     uint32_t elapsed = (now - m_lastToneToggleTime) % 6000;
     if (elapsed < 2000) {
       generateToneChunk(toneBuffer, AUDIO_BUFFER_SAMPLES, 440.0f, 480.0f);
@@ -107,7 +181,7 @@ void AudioManager::update() {
       writeSpeakerSamples(toneBuffer, AUDIO_BUFFER_SAMPLES);
     }
   } else if (m_activeTone == TONE_BUSY) {
-    // Busy Tone: 480Hz + 620Hz (0.5s On, 0.5s Off)
+    // 480Hz + 620Hz Busy Signal (0.5s on / 0.5s off)
     uint32_t elapsed = (now - m_lastToneToggleTime) % 1000;
     if (elapsed < 500) {
       generateToneChunk(toneBuffer, AUDIO_BUFFER_SAMPLES, 480.0f, 620.0f);
@@ -125,12 +199,31 @@ size_t AudioManager::readMicSamples(int16_t* buffer, size_t numSamples) {
   for (size_t i = 0; i < numSamples; i++) {
     int raw = analogRead(PIN_MIC_ADC);
     int centered = (raw - 2048) << 4; // Scale 12-bit to 16-bit
-    buffer[i] = (int16_t)constrain((float)centered * m_gainMultiplier, -32768.0f, 32767.0f);
+    int16_t sampleWithGain = (int16_t)constrain((float)centered * m_gainMultiplier, -32768.0f, 32767.0f);
+
+    // Apply selected DSP Profile (HD vs Vintage POTS vs 1930s Lo-Fi)
+    buffer[i] = processDspSample(sampleWithGain);
   }
+
+  // Inject sidetone into earpiece speaker if active
+  if (m_sidetoneMultiplier > 0.01f) {
+    int16_t sidetoneBuffer[AUDIO_BUFFER_SAMPLES];
+    for (size_t i = 0; i < numSamples; i++) {
+      sidetoneBuffer[i] = (int16_t)((float)buffer[i] * m_sidetoneMultiplier * m_volumeMultiplier);
+    }
+    writeSpeakerSamples(sidetoneBuffer, numSamples);
+  }
+
   return numSamples;
 }
 
 void AudioManager::writeSpeakerSamples(const int16_t* buffer, size_t numSamples) {
+  int16_t outBuffer[AUDIO_BUFFER_SAMPLES];
+  for (size_t i = 0; i < numSamples; i++) {
+    int16_t dspProcessed = processDspSample(buffer[i]);
+    outBuffer[i] = (int16_t)((float)dspProcessed * m_volumeMultiplier);
+  }
+
   size_t bytesWritten = 0;
-  i2s_write(I2S_PORT, buffer, numSamples * sizeof(int16_t), &bytesWritten, portMAX_DELAY);
+  i2s_write(I2S_PORT, outBuffer, numSamples * sizeof(int16_t), &bytesWritten, portMAX_DELAY);
 }

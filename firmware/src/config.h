@@ -37,10 +37,15 @@
 #define AUDIO_SAMPLE_RATE       16000   // 16kHz High-Def Telephony Audio
 #define AUDIO_BITS_PER_SAMPLE   16
 #define AUDIO_BUFFER_SAMPLES    256     // Low-latency 16ms audio frames
-#define BELL_RING_FREQUENCY_HZ  20      // Vintage Bell AC Resonance (20 Hz)
+#define DEFAULT_BELL_FREQ_HZ    20.0f   // Default Bell AC Resonance (20 Hz)
 #define ROTARY_DEBOUNCE_MS      15      // Pulse contact debouncing
 #define INTER_DIGIT_TIMEOUT_MS  3000    // Inter-digit timeout before placing call
 
+// Hook-Flash Call Transfer Detection Window
+#define HOOK_FLASH_MIN_MS       80      // Minimum duration for valid flash
+#define HOOK_FLASH_MAX_MS       500     // Maximum duration before treated as on-hook hangup
+
 // NVS Storage Namespace
 #define NVS_NAMESPACE           "decatone"
-#define FIRMWARE_VERSION        "1.0.0"
+#define FIRMWARE_VERSION        "1.1.0"
+

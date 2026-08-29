@@ -4,6 +4,7 @@ import fs from 'fs';
 import multer from 'multer';
 import { execute, query, queryOne } from '../db/connection';
 import { authenticateToken, AuthenticatedRequest } from '../middleware/authMiddleware';
+import { VoicemailCryptoService } from '../services/voicemailCryptoService';
 
 const router = Router();
 router.use(authenticateToken);
@@ -48,6 +49,53 @@ router.get('/', async (req: AuthenticatedRequest, res: Response) => {
     return res.json({ voicemails });
   } catch (err) {
     return res.status(500).json({ error: 'Failed to fetch voicemails' });
+  }
+});
+
+// Stream Decrypted Voicemail Audio (Zero-Access Decryption)
+router.get('/:id/audio', async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    const vm = await queryOne<any>(
+      'SELECT vm.*, u.key_salt FROM voicemails vm JOIN users u ON u.id = vm.user_id WHERE vm.id = ? AND vm.user_id = ?',
+      [id, req.user!.id]
+    );
+
+    if (!vm || !vm.audio_url) {
+      return res.status(404).json({ error: 'Voicemail not found' });
+    }
+
+    const filename = path.basename(vm.audio_url);
+    const filePath = path.join(voicemailsDir, filename);
+
+    if (!fs.existsSync(filePath)) {
+      return res.status(404).json({ error: 'Audio file missing from storage' });
+    }
+
+    const rawFileBuffer = fs.readFileSync(filePath);
+
+    // If encrypted, decrypt in memory using recipient user's derived key
+    if (vm.is_encrypted && vm.encryption_iv && vm.encryption_tag && vm.key_salt) {
+      const userKey = VoicemailCryptoService.deriveUserKey(req.user!.id, vm.key_salt);
+      const decryptedWav = VoicemailCryptoService.decryptAudio(
+        rawFileBuffer,
+        userKey,
+        vm.encryption_iv,
+        vm.encryption_tag
+      );
+
+      res.setHeader('Content-Type', 'audio/wav');
+      res.setHeader('Content-Length', decryptedWav.length);
+      res.setHeader('Cache-Control', 'private, no-cache, no-store');
+      return res.send(decryptedWav);
+    } else {
+      // Legacy unencrypted fallback
+      res.setHeader('Content-Type', 'audio/wav');
+      return res.send(rawFileBuffer);
+    }
+  } catch (err) {
+    console.error('[Voicemail Decryption Error]:', err);
+    return res.status(500).json({ error: 'Failed to decrypt voicemail audio' });
   }
 });
 

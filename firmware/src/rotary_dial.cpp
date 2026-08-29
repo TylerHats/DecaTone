@@ -24,9 +24,10 @@ void IRAM_ATTR RotaryDialManager::handleHookInterrupt() {
   }
 }
 
-void RotaryDialManager::begin(OnDigitDialedCallback digitCb, OnHookStateChangedCallback hookCb) {
+void RotaryDialManager::begin(OnDigitDialedCallback digitCb, OnHookStateChangedCallback hookCb, OnHookFlashCallback flashCb) {
   m_digitCallback = digitCb;
   m_hookCallback = hookCb;
+  m_hookFlashCallback = flashCb;
 
   pinMode(PIN_HOOK_SWITCH, INPUT_PULLUP);
   pinMode(PIN_DIAL_PULSE, INPUT_PULLUP);
@@ -34,6 +35,7 @@ void RotaryDialManager::begin(OnDigitDialedCallback digitCb, OnHookStateChangedC
 
   // Initial hook state read (Active LOW = Ground = Off Hook)
   m_currentOffHook = (digitalRead(PIN_HOOK_SWITCH) == LOW);
+  m_hookPendingHangup = false;
 
   attachInterrupt(digitalPinToInterrupt(PIN_DIAL_PULSE), handlePulseInterrupt, FALLING);
   attachInterrupt(digitalPinToInterrupt(PIN_HOOK_SWITCH), handleHookInterrupt, CHANGE);
@@ -44,16 +46,44 @@ void RotaryDialManager::begin(OnDigitDialedCallback digitCb, OnHookStateChangedC
 void RotaryDialManager::update() {
   uint32_t now = millis();
 
-  // 1. Process Hook Switch Transitions
+  // 1. Process Hook Switch Transitions & Hook-Flash Detection
   if (s_hookChanged) {
     s_hookChanged = false;
-    bool newOffHook = (digitalRead(PIN_HOOK_SWITCH) == LOW);
-    if (newOffHook != m_currentOffHook) {
-      m_currentOffHook = newOffHook;
-      Serial.printf("[Rotary] Handset State Changed: %s\n", m_currentOffHook ? "OFF HOOK" : "ON HOOK");
-      if (m_hookCallback) {
-        m_hookCallback(m_currentOffHook);
+    bool isLow = (digitalRead(PIN_HOOK_SWITCH) == LOW); // LOW = Handset lifted (Off-Hook)
+
+    if (!isLow && m_currentOffHook && !m_hookPendingHangup) {
+      // Handset placed down (pressed down) while currently off-hook
+      m_hookPendingHangup = true;
+      m_hookDownTime = now;
+    } else if (isLow && m_hookPendingHangup) {
+      // Handset was tapped down and lifted back up within flash window
+      uint32_t pressDuration = now - m_hookDownTime;
+      m_hookPendingHangup = false;
+
+      if (pressDuration >= HOOK_FLASH_MIN_MS && pressDuration <= HOOK_FLASH_MAX_MS) {
+        Serial.printf("[Rotary] ⚡ HOOK FLASH DETECTED (%u ms)! Triggering Call Transfer / Hold.\n", pressDuration);
+        if (m_hookFlashCallback) {
+          m_hookFlashCallback();
+        }
       }
+    } else if (isLow && !m_currentOffHook) {
+      // Handset lifted from cradle (Off-Hook)
+      m_currentOffHook = true;
+      m_hookPendingHangup = false;
+      Serial.println("[Rotary] Handset State Changed: OFF HOOK");
+      if (m_hookCallback) {
+        m_hookCallback(true);
+      }
+    }
+  }
+
+  // Check if hook switch has remained down for > HOOK_FLASH_MAX_MS (Genuine Hangup)
+  if (m_hookPendingHangup && (now - m_hookDownTime > HOOK_FLASH_MAX_MS)) {
+    m_hookPendingHangup = false;
+    m_currentOffHook = false;
+    Serial.println("[Rotary] Handset State Changed: ON HOOK (Hangup)");
+    if (m_hookCallback) {
+      m_hookCallback(false);
     }
   }
 

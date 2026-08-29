@@ -5,6 +5,8 @@ import crypto from 'crypto';
 import path from 'path';
 import fs from 'fs';
 import { execute, query, queryOne } from '../db/connection';
+import { VoicemailCryptoService } from './voicemailCryptoService';
+import { EmailService } from './emailService';
 
 interface PhoneSocketClient {
   ws: WebSocket;
@@ -27,6 +29,9 @@ interface ActiveCall {
   calleeName: string;
   sessionKey: string;
   state: 'ringing' | 'connected' | 'voicemail';
+  isOnHold?: boolean;
+  isIntercom?: boolean;
+  intercomParticipants?: Set<string>;
   startedAt: number;
   connectedAt?: number;
   ringTimeoutTimer?: NodeJS.Timeout;
@@ -44,6 +49,7 @@ class PhoneSwitchService {
   private phoneClients = new Map<string, PhoneSocketClient>(); // deviceId -> client
   private activeCalls = new Map<string, ActiveCall>(); // callId -> ActiveCall
   private dialedBuffers = new Map<string, { buffer: string; timer?: NodeJS.Timeout }>(); // deviceId -> dialed string
+  private transferStates = new Map<string, { callId: string; heldPeerDeviceId: string; buffer: string; timer?: NodeJS.Timeout }>(); // deviceId -> transfer state
   private webClients = new Set<WebSocket>(); // Connected web browser dashboards
 
   public init(server: http.Server | https.Server) {
@@ -128,22 +134,34 @@ class PhoneSwitchService {
     switch (type) {
       case 'register':
       case 'handshake': {
-        const { mac, firmwareVersion, rssi } = msg;
+        const { mac, firmwareVersion, rssi, hardwareProfile, bellFrequencyHz, hookFlashEnabled } = msg;
         setRegisteredDeviceId(deviceId);
 
         // Check or insert phone in database
         let phone = await queryOne<any>('SELECT * FROM phones WHERE device_id = ?', [deviceId]);
         if (!phone) {
           await execute(
-            `INSERT INTO phones (device_id, mac_address, ip_address, firmware_version, rssi, is_online, last_seen)
-             VALUES (?, ?, ?, ?, ?, 1, CURRENT_TIMESTAMP)`,
-            [deviceId, mac || '', ip, firmwareVersion || '1.0.0', rssi || 0]
+            `INSERT INTO phones (device_id, mac_address, ip_address, firmware_version, rssi, hardware_profile, bell_frequency_hz, hook_flash_enabled, is_online, last_seen)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, CURRENT_TIMESTAMP)`,
+            [
+              deviceId,
+              mac || '',
+              ip,
+              firmwareVersion || '1.1.0',
+              rssi || 0,
+              hardwareProfile || 'western_electric_500',
+              bellFrequencyHz || 20.0,
+              hookFlashEnabled !== false ? 1 : 0
+            ]
           );
           phone = await queryOne<any>('SELECT * FROM phones WHERE device_id = ?', [deviceId]);
         } else {
           await execute(
-            `UPDATE phones SET is_online = 1, ip_address = ?, firmware_version = ?, rssi = ?, last_seen = CURRENT_TIMESTAMP WHERE device_id = ?`,
-            [ip, firmwareVersion || phone.firmware_version, rssi || 0, deviceId]
+            `UPDATE phones SET is_online = 1, ip_address = ?, firmware_version = ?, rssi = ?,
+             hardware_profile = COALESCE(hardware_profile, ?),
+             bell_frequency_hz = COALESCE(bell_frequency_hz, ?),
+             last_seen = CURRENT_TIMESTAMP WHERE device_id = ?`,
+            [ip, firmwareVersion || phone.firmware_version, rssi || 0, hardwareProfile || 'western_electric_500', bellFrequencyHz || 20.0, deviceId]
           );
         }
 
@@ -174,8 +192,14 @@ class PhoneSwitchService {
             phoneNumber: user?.phone_number || null,
             earpieceVolume: phone.earpiece_volume ?? 80,
             micSensitivity: phone.mic_sensitivity ?? 80,
+            audioProfile: phone.audio_profile || 'vintage_pots',
+            sidetoneLevel: phone.sidetone_level ?? 10,
             ringStyle: phone.ring_style || 'traditional',
-            ringCadence: phone.ring_cadence_custom || '2000,4000'
+            ringCadence: phone.ring_cadence_custom || '2000,4000',
+            bellFrequencyHz: phone.bell_frequency_hz ?? 20.0,
+            hardwareProfile: phone.hardware_profile || 'western_electric_500',
+            hookFlashEnabled: phone.hook_flash_enabled !== 0,
+            intercomEnabled: phone.intercom_enabled !== 0
           })
         );
 
@@ -184,10 +208,12 @@ class PhoneSwitchService {
           deviceId,
           isOnline: true,
           isPaired: !!phone.user_id,
-          phoneNumber: user?.phone_number || null
+          phoneNumber: user?.phone_number || null,
+          hardwareProfile: phone.hardware_profile,
+          bellFrequencyHz: phone.bell_frequency_hz
         });
 
-        console.log(`[Switch] ESP32-S3 registered: ${deviceId} (${ip}) - Paired: ${!!phone.user_id}`);
+        console.log(`[Switch] ESP32-S3 registered: ${deviceId} (${ip}) - Model: ${phone.hardware_profile || 'standard'} - Bell: ${phone.bell_frequency_hz || 20}Hz`);
         break;
       }
 
@@ -207,6 +233,11 @@ class PhoneSwitchService {
       case 'hook_state': {
         const { state } = msg; // 'off_hook' or 'on_hook'
         await this.handleHookStateChange(deviceId, state);
+        break;
+      }
+
+      case 'hook_flash': {
+        await this.handleHookFlash(deviceId);
         break;
       }
 
@@ -266,12 +297,234 @@ class PhoneSwitchService {
     }
   }
 
+  private async handleHookFlash(deviceId: string) {
+    const phone = await queryOne<any>('SELECT * FROM phones WHERE device_id = ?', [deviceId]);
+    if (phone && phone.hook_flash_enabled === 0) {
+      console.log(`[Switch] Hook flash ignored: disabled for ${deviceId}`);
+      return;
+    }
+
+    const call = this.findCallByDevice(deviceId);
+    if (!call || call.state !== 'connected') {
+      console.log(`[Switch] Hook flash ignored: no active connected call for ${deviceId}`);
+      return;
+    }
+
+    const peerDeviceId = (deviceId === call.callerDeviceId) ? call.calleeDeviceId : call.callerDeviceId;
+
+    if (!call.isOnHold) {
+      // Put call on HOLD
+      call.isOnHold = true;
+      this.transferStates.set(deviceId, {
+        callId: call.id,
+        heldPeerDeviceId: peerDeviceId,
+        buffer: ''
+      });
+
+      // Send hold event to peer
+      this.sendToDevice(peerDeviceId, { type: 'call_on_hold', message: 'Call placed on hold by peer' });
+      // Send dial tone to initiator so they can dial transfer extension
+      this.sendToDevice(deviceId, { type: 'play_tone', tone: 'dial' });
+
+      console.log(`[Switch] ⏸️ Call ${call.id} placed ON HOLD by ${deviceId}. Peer ${peerDeviceId} on hold.`);
+      this.broadcastToWeb({
+        type: 'call_hold_status',
+        callId: call.id,
+        isOnHold: true,
+        initiatorDeviceId: deviceId,
+        heldPeerDeviceId: peerDeviceId
+      });
+    } else {
+      // Unhold / Resume Call
+      call.isOnHold = false;
+      this.transferStates.delete(deviceId);
+
+      this.sendToDevice(deviceId, { type: 'stop_tone' });
+      this.sendToDevice(peerDeviceId, { type: 'stop_tone' });
+      this.sendToDevice(peerDeviceId, { type: 'call_connected', sessionKey: call.sessionKey });
+
+      console.log(`[Switch] ▶️ Call ${call.id} resumed by ${deviceId}.`);
+      this.broadcastToWeb({
+        type: 'call_hold_status',
+        callId: call.id,
+        isOnHold: false,
+        initiatorDeviceId: deviceId,
+        heldPeerDeviceId: peerDeviceId
+      });
+    }
+  }
+
+  private async executeCallTransfer(initiatorDeviceId: string, callId: string, heldPeerDeviceId: string, targetUser: any) {
+    const call = this.activeCalls.get(callId);
+    if (!call) return;
+
+    // Find target phone
+    const targetPhone = await queryOne<any>('SELECT * FROM phones WHERE user_id = ?', [targetUser.id]);
+    const targetClient = targetPhone ? this.phoneClients.get(targetPhone.device_id) : null;
+
+    if (!targetPhone || !targetClient || !targetPhone.is_online || targetPhone.call_state !== 'idle') {
+      console.log(`[Switch] Transfer failed: Target extension ${targetUser.phone_number} unavailable`);
+      this.sendToDevice(initiatorDeviceId, { type: 'play_tone', tone: 'busy' });
+      return;
+    }
+
+    console.log(`[Switch] 🔀 Transferring call ${call.id} to ${targetUser.username} (${targetUser.phone_number})`);
+
+    // Release initiator
+    this.sendToDevice(initiatorDeviceId, { type: 'stop_tone' });
+    this.sendToDevice(initiatorDeviceId, { type: 'call_ended', reason: 'transferred' });
+    await execute('UPDATE phones SET call_state = ? WHERE device_id = ?', ['idle', initiatorDeviceId]);
+
+    // Re-wire active call: heldPeerDeviceId <---> targetPhone.device_id
+    if (call.callerDeviceId === initiatorDeviceId) {
+      call.callerDeviceId = targetPhone.device_id;
+      call.callerUserId = targetUser.id;
+      call.callerNumber = targetUser.phone_number;
+      call.callerName = targetUser.display_name || targetUser.username;
+    } else {
+      call.calleeDeviceId = targetPhone.device_id;
+      call.calleeUserId = targetUser.id;
+      call.calleeNumber = targetUser.phone_number;
+      call.calleeName = targetUser.display_name || targetUser.username;
+    }
+
+    call.isOnHold = false;
+    call.state = 'ringing';
+
+    // Ring target phone
+    this.sendToDevice(targetPhone.device_id, {
+      type: 'incoming_call',
+      callerNumber: (call.callerDeviceId === targetPhone.device_id) ? call.calleeNumber : call.callerNumber,
+      callerName: (call.callerDeviceId === targetPhone.device_id) ? call.calleeName : call.callerName,
+      ringStyle: targetPhone.ring_style || 'traditional',
+      ringCadence: targetPhone.ring_cadence_custom || '2000,4000',
+      bellFrequencyHz: targetPhone.bell_frequency_hz ?? 20.0
+    });
+
+    // Send ringback to held peer
+    this.sendToDevice(heldPeerDeviceId, { type: 'play_tone', tone: 'ringback' });
+    await execute('UPDATE phones SET call_state = ? WHERE device_id = ?', ['ringing', targetPhone.device_id]);
+  }
+
+  public async initiateIntercomBroadcast(callerDeviceId: string) {
+    const callerPhone = await queryOne<any>('SELECT * FROM phones WHERE device_id = ?', [callerDeviceId]);
+    const callerUser = callerPhone?.user_id
+      ? await queryOne<any>('SELECT * FROM users WHERE id = ?', [callerPhone.user_id])
+      : null;
+
+    const callerNumber = callerUser?.phone_number || '00';
+    const callerName = (callerUser?.display_name || callerUser?.username || 'Switchboard') + ' (Intercom)';
+
+    // Find all online phones except caller
+    const onlinePhones = await query<any>(
+      'SELECT * FROM phones WHERE is_online = 1 AND device_id != ?',
+      [callerDeviceId]
+    );
+
+    if (onlinePhones.length === 0) {
+      console.log(`[Switch] Intercom broadcast from ${callerDeviceId}: No other phones online`);
+      this.sendToDevice(callerDeviceId, { type: 'play_tone', tone: 'busy' });
+      return;
+    }
+
+    const callId = `intercom_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+    const sessionKey = crypto.randomBytes(32).toString('hex');
+    const participants = new Set<string>();
+
+    const intercomCall: ActiveCall = {
+      id: callId,
+      callerDeviceId,
+      callerUserId: callerUser?.id,
+      callerNumber,
+      callerName,
+      calleeDeviceId: 'all_phones',
+      calleeNumber: '00',
+      calleeName: 'All-Call Broadcast Intercom',
+      sessionKey,
+      state: 'connected',
+      isIntercom: true,
+      intercomParticipants: participants,
+      startedAt: Date.now(),
+      connectedAt: Date.now()
+    };
+
+    this.activeCalls.set(callId, intercomCall);
+
+    // Caller connected immediately to the broadcast transmitter
+    this.sendToDevice(callerDeviceId, {
+      type: 'call_connected',
+      sessionKey,
+      isIntercom: true,
+      role: 'broadcaster'
+    });
+    await execute('UPDATE phones SET call_state = ? WHERE device_id = ?', ['in_call', callerDeviceId]);
+
+    console.log(`[Switch] 📢 All-Call Broadcast Intercom started by ${callerName} (${callerDeviceId}) -> Ringing ${onlinePhones.length} phones`);
+
+    for (const targetPhone of onlinePhones) {
+      const targetClient = this.phoneClients.get(targetPhone.device_id);
+      if (targetClient && targetClient.ws.readyState === WebSocket.OPEN && targetPhone.call_state === 'idle') {
+        participants.add(targetPhone.device_id);
+        this.sendToDevice(targetPhone.device_id, {
+          type: 'intercom_incoming',
+          callerNumber,
+          callerName,
+          ringStyle: 'pulse',
+          ringCadence: '300,300',
+          bellFrequencyHz: targetPhone.bell_frequency_hz ?? 20.0
+        });
+      }
+    }
+
+    this.broadcastToWeb({
+      type: 'intercom_broadcast_started',
+      callId,
+      callerNumber,
+      callerName,
+      targetCount: participants.size
+    });
+  }
+
   private async handleDialDigit(deviceId: string, digit: string) {
     const client = this.phoneClients.get(deviceId);
     if (!client) return;
 
     // Stop dial tone as soon as user starts dialing
     this.sendToDevice(deviceId, { type: 'stop_tone' });
+
+    // Check if in Hook-Flash Call Transfer Dialing Mode
+    const transferState = this.transferStates.get(deviceId);
+    if (transferState) {
+      if (transferState.timer) clearTimeout(transferState.timer);
+      transferState.buffer += digit;
+      const transferTargetNumber = transferState.buffer;
+
+      const targetUser = await queryOne<any>(
+        'SELECT id, username, display_name, phone_number FROM users WHERE phone_number = ?',
+        [transferTargetNumber]
+      );
+
+      if (targetUser) {
+        this.transferStates.delete(deviceId);
+        await this.executeCallTransfer(deviceId, transferState.callId, transferState.heldPeerDeviceId, targetUser);
+        return;
+      }
+
+      transferState.timer = setTimeout(async () => {
+        const dest = transferState.buffer;
+        this.transferStates.delete(deviceId);
+        const userByNum = await queryOne<any>(
+          'SELECT id, username, display_name, phone_number FROM users WHERE phone_number = ?',
+          [dest]
+        );
+        if (userByNum) {
+          await this.executeCallTransfer(deviceId, transferState.callId, transferState.heldPeerDeviceId, userByNum);
+        } else {
+          this.sendToDevice(deviceId, { type: 'play_tone', tone: 'busy' });
+        }
+      }, 3000);
+      return;
+    }
 
     let dialState = this.dialedBuffers.get(deviceId);
     if (!dialState) {
@@ -293,6 +546,13 @@ class PhoneSwitchService {
       currentBuffer
     });
 
+    // Check Intercom / All-Call Broadcast (Dial '00' or '*0')
+    if (currentBuffer === '00' || currentBuffer === '*0') {
+      this.clearDialBuffer(deviceId);
+      await this.initiateIntercomBroadcast(deviceId);
+      return;
+    }
+
     // Check Single Digit Speed Dial (1-9) or Voicemail (0)
     if (currentBuffer.length === 1 && client.userId) {
       if (digit === '0') {
@@ -308,7 +568,6 @@ class PhoneSwitchService {
       );
 
       if (speedDial) {
-        // Set a short debounce timer in case user is dialing a multi-digit number starting with this digit
         dialState.timer = setTimeout(async () => {
           this.clearDialBuffer(deviceId);
           await this.initiateCall(deviceId, speedDial.target_phone_number);
@@ -517,6 +776,67 @@ class PhoneSwitchService {
 
     this.activeCalls.delete(callId);
 
+    // If call was in voicemail recording state and audio chunks were captured
+    if (call.state === 'voicemail' && call.voicemailChunks && call.voicemailChunks.length > 0 && call.calleeUserId) {
+      try {
+        const rawPcm = Buffer.concat(call.voicemailChunks);
+        const durationSec = Math.max(1, Math.round(rawPcm.length / 32000)); // 16kHz 16-bit mono = 32,000 bytes/sec
+
+        if (rawPcm.length >= 16000) { // At least 0.5s of audio
+          // Look up or generate user's key salt
+          let userRow = await queryOne<any>('SELECT id, key_salt FROM users WHERE id = ?', [call.calleeUserId]);
+          let keySalt = userRow?.key_salt;
+          if (!keySalt) {
+            keySalt = crypto.randomBytes(16).toString('hex');
+            await execute('UPDATE users SET key_salt = ? WHERE id = ?', [keySalt, call.calleeUserId]);
+          }
+
+          // Build WAV container and encrypt with recipient's AES-256-GCM key
+          const wavData = VoicemailCryptoService.createWavBuffer(rawPcm, 16000, 1, 16);
+          const userKey = VoicemailCryptoService.deriveUserKey(call.calleeUserId, keySalt);
+          const encrypted = VoicemailCryptoService.encryptAudio(wavData, userKey);
+
+          // Write encrypted ciphertext to disk with .enc extension
+          const encFilename = `vm_${call.calleeUserId}_${Date.now()}.enc`;
+          const encFilePath = path.join(voicemailDir, encFilename);
+          fs.writeFileSync(encFilePath, encrypted.ciphertext);
+
+          const audioUrl = `/api/voicemail/raw/${encFilename}`;
+
+          const result = await execute(
+            `INSERT INTO voicemails (user_id, caller_user_id, caller_number, audio_url, duration_sec, is_encrypted, encryption_iv, encryption_tag, created_at)
+             VALUES (?, ?, ?, ?, ?, 1, ?, ?, CURRENT_TIMESTAMP)`,
+            [call.calleeUserId, call.callerUserId || null, call.callerNumber, audioUrl, durationSec, encrypted.iv, encrypted.tag]
+          );
+
+          this.broadcastToWeb({
+            type: 'new_voicemail',
+            userId: call.calleeUserId,
+            callerNumber: call.callerNumber,
+            durationSec,
+            voicemailId: result.lastID
+          });
+
+          console.log(`[Voicemail] Encrypted & saved zero-access voicemail for User ${call.calleeUserId} (${durationSec}s, AES-256-GCM).`);
+
+          // Send Email notification to recipient if enabled
+          const calleeUser = await queryOne<any>('SELECT email, username, display_name, notify_on_voicemail FROM users WHERE id = ?', [call.calleeUserId]);
+          if (calleeUser && calleeUser.email && calleeUser.notify_on_voicemail) {
+            EmailService.sendVoicemailNotification(
+              calleeUser.email,
+              calleeUser,
+              call.callerNumber,
+              call.callerName,
+              durationSec,
+              'http://localhost:4000'
+            ).catch(e => console.error(e));
+          }
+        }
+      } catch (err) {
+        console.error('[Voicemail Error] Failed to encrypt/save voicemail:', err);
+      }
+    }
+
     const durationSec = call.connectedAt ? Math.round((Date.now() - call.connectedAt) / 1000) : 0;
     const callStatus = call.connectedAt ? 'completed' : (reason === 'timeout' ? 'missed' : 'rejected');
 
@@ -526,6 +846,20 @@ class PhoneSwitchService {
        VALUES (?, ?, ?, ?, ?, ?, datetime(?, 'unixepoch'), CURRENT_TIMESTAMP)`,
       [call.callerUserId || null, call.calleeUserId || null, call.callerNumber, call.calleeNumber, callStatus, durationSec, Math.floor(call.startedAt / 1000)]
     );
+
+    // If call was missed, send notification email to callee if enabled
+    if (callStatus === 'missed' && call.calleeUserId && !call.connectedAt) {
+      const calleeUser = await queryOne<any>('SELECT email, username, display_name, notify_on_missed_call FROM users WHERE id = ?', [call.calleeUserId]);
+      if (calleeUser && calleeUser.email && calleeUser.notify_on_missed_call) {
+        EmailService.sendMissedCallNotification(
+          calleeUser.email,
+          calleeUser,
+          call.callerNumber,
+          call.callerName,
+          'http://localhost:4000'
+        ).catch(e => console.error(e));
+      }
+    }
 
     // Stop tones and rings on devices
     this.sendToDevice(call.callerDeviceId, { type: 'call_ended', callId, reason });
@@ -629,6 +963,26 @@ class PhoneSwitchService {
     if (!call) return;
 
     if (call.state === 'connected') {
+      // Intercom Broadcast Audio Routing
+      if (call.isIntercom) {
+        if (call.intercomParticipants) {
+          for (const partDeviceId of call.intercomParticipants) {
+            if (partDeviceId !== sourceDeviceId) {
+              const partClient = this.phoneClients.get(partDeviceId);
+              if (partClient && partClient.ws.readyState === WebSocket.OPEN) {
+                partClient.ws.send(packet);
+              }
+            }
+          }
+        }
+        return;
+      }
+
+      // If call is on hold, do not stream audio to held peer
+      if (call.isOnHold) {
+        return;
+      }
+
       const targetDeviceId = sourceDeviceId === call.callerDeviceId ? call.calleeDeviceId : call.callerDeviceId;
       const targetClient = this.phoneClients.get(targetDeviceId);
       if (targetClient && targetClient.ws.readyState === WebSocket.OPEN) {
@@ -670,8 +1024,14 @@ class PhoneSwitchService {
     settings: {
       earpieceVolume?: number;
       micSensitivity?: number;
+      audioProfile?: string;
+      sidetoneLevel?: number;
       ringStyle?: string;
       ringCadence?: string;
+      bellFrequencyHz?: number;
+      hardwareProfile?: string;
+      hookFlashEnabled?: boolean;
+      intercomEnabled?: boolean;
     }
   ): boolean {
     const client = this.phoneClients.get(deviceId);

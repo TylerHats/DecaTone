@@ -154,7 +154,7 @@ export const VoicemailPage: React.FC = () => {
                   )}
 
                   <a
-                    href={vm.audio_url}
+                    href={`/api/voicemail/${vm.id}/audio?token=${token}`}
                     download={`voicemail_${vm.caller_number}_${vm.id}.wav`}
                     className="btn btn-secondary btn-sm"
                     title="Download Audio File"
@@ -172,11 +172,11 @@ export const VoicemailPage: React.FC = () => {
                 </div>
               </div>
 
-              {/* In-Browser Audio Player */}
+              {/* In-Browser Decrypted Audio Player */}
               <div style={{ background: 'rgba(0,0,0,0.4)', padding: '0.75rem', borderRadius: 'var(--radius-sm)' }}>
                 <audio
                   controls
-                  src={vm.audio_url}
+                  src={`/api/voicemail/${vm.id}/audio?token=${token}`}
                   style={{ width: '100%', height: '36px' }}
                   onPlay={() => !vm.is_read && handleMarkRead(vm.id)}
                 />

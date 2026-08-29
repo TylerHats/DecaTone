@@ -15,6 +15,7 @@ import friendRoutes from './routes/friendRoutes';
 import voicemailRoutes from './routes/voicemailRoutes';
 import adminRoutes from './routes/adminRoutes';
 import setupRoutes from './routes/setupRoutes';
+import legalRoutes from './routes/legalRoutes';
 
 const app = express();
 const PORT = process.env.PORT || 4000;
@@ -170,6 +171,7 @@ app.use('/api/phone', phoneRoutes);
 app.use('/api/friends', friendRoutes);
 app.use('/api/voicemail', voicemailRoutes);
 app.use('/api/admin', adminRoutes);
+app.use('/api/legal', legalRoutes);
 
 // Serve Frontend Static Files in production if built
 const frontendDist = path.join(__dirname, '../../frontend/dist');

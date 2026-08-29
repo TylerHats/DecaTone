@@ -46,6 +46,9 @@ export const AdminDashboardPage: React.FC = () => {
   const [settings, setSettings] = useState<Record<string, string>>({});
   const [logoFile, setLogoFile] = useState<File | null>(null);
   const [savingSettings, setSavingSettings] = useState(false);
+  const [testEmailInput, setTestEmailInput] = useState('');
+  const [sendingTestEmail, setSendingTestEmail] = useState(false);
+  const [smtpTestResult, setSmtpTestResult] = useState<{ success: boolean; message: string } | null>(null);
 
   // Diagnostics
   const [healthInfo, setHealthInfo] = useState<any>(null);
@@ -390,6 +393,36 @@ export const AdminDashboardPage: React.FC = () => {
       setToast({ type: 'success', text: 'System settings & whitelabel configuration saved!' });
     } catch (e) {}
     setSavingSettings(false);
+  };
+
+  const handleSendTestEmail = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!testEmailInput.trim()) return;
+
+    setSendingTestEmail(true);
+    setSmtpTestResult(null);
+
+    try {
+      const res = await fetch('/api/admin/smtp/test', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`
+        },
+        body: JSON.stringify({ testEmail: testEmailInput.trim() })
+      });
+
+      const data = await res.json();
+      if (res.ok) {
+        setSmtpTestResult({ success: true, message: data.message });
+      } else {
+        setSmtpTestResult({ success: false, message: data.error || 'SMTP test failed' });
+      }
+    } catch (err: any) {
+      setSmtpTestResult({ success: false, message: err.message || 'SMTP connection failed' });
+    } finally {
+      setSendingTestEmail(false);
+    }
   };
 
   // Factory Reset
@@ -1033,6 +1066,177 @@ export const AdminDashboardPage: React.FC = () => {
                 <option value="false">Disabled (Extension Only)</option>
                 <option value="true">Enabled (Area Code + Extension)</option>
               </select>
+            </div>
+          </div>
+
+          {/* SMTP Outbound Mail Dispatcher Configuration */}
+          <div style={{ borderTop: '1px solid var(--border-subtle)', paddingTop: '1.5rem', display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
+            <div>
+              <h4 style={{ fontSize: '1.05rem', color: 'var(--accent-amber)', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                <Mail size={18} /> SMTP Outbound Mail Server & Notifications
+              </h4>
+              <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem', marginTop: '0.25rem' }}>
+                Configure SMTP to enable self-service password recovery, new user welcome greetings, and voicemail/missed call email alerts.
+              </p>
+            </div>
+
+            <div className="grid-2">
+              <div className="form-group">
+                <label className="form-label">SMTP Host / Server</label>
+                <input
+                  type="text"
+                  className="form-input"
+                  placeholder="e.g. smtp.gmail.com or mail.example.com"
+                  value={settings.smtp_host || ''}
+                  onChange={(e) => setSettings({ ...settings, smtp_host: e.target.value })}
+                />
+              </div>
+
+              <div className="form-group">
+                <label className="form-label">SMTP Port</label>
+                <input
+                  type="text"
+                  className="form-input"
+                  placeholder="587 (TLS), 465 (SSL), or 25"
+                  value={settings.smtp_port || ''}
+                  onChange={(e) => setSettings({ ...settings, smtp_port: e.target.value })}
+                  style={{ fontFamily: 'var(--font-mono)' }}
+                />
+              </div>
+
+              <div className="form-group">
+                <label className="form-label">SMTP Username</label>
+                <input
+                  type="text"
+                  className="form-input"
+                  placeholder="e.g. your-email@gmail.com"
+                  value={settings.smtp_user || ''}
+                  onChange={(e) => setSettings({ ...settings, smtp_user: e.target.value })}
+                />
+              </div>
+
+              <div className="form-group">
+                <label className="form-label">SMTP Password / App Key</label>
+                <input
+                  type="password"
+                  className="form-input"
+                  placeholder="••••••••••••"
+                  value={settings.smtp_pass || ''}
+                  onChange={(e) => setSettings({ ...settings, smtp_pass: e.target.value })}
+                />
+              </div>
+
+              <div className="form-group">
+                <label className="form-label">From Header / Sender Address</label>
+                <input
+                  type="text"
+                  className="form-input"
+                  placeholder="DecaTone Switchboard <switchboard@example.com>"
+                  value={settings.smtp_from || ''}
+                  onChange={(e) => setSettings({ ...settings, smtp_from: e.target.value })}
+                />
+              </div>
+
+              <div className="form-group">
+                <label className="form-label">Security & Encryption</label>
+                <select
+                  className="form-select"
+                  value={settings.smtp_secure || 'false'}
+                  onChange={(e) => setSettings({ ...settings, smtp_secure: e.target.value })}
+                >
+                  <option value="false">STARTTLS / Plain (Default for Port 587 / 25)</option>
+                  <option value="true">SSL / Direct TLS (Port 465)</option>
+                </select>
+              </div>
+            </div>
+
+            {/* Test Email Dispatcher Diagnostic Box */}
+            <div style={{ background: 'rgba(0,0,0,0.3)', border: '1px solid var(--border-subtle)', borderRadius: 'var(--radius-sm)', padding: '1rem' }}>
+              <div style={{ fontSize: '0.9rem', fontWeight: '600', color: '#fff', marginBottom: '0.5rem' }}>
+                Test SMTP Outbound Dispatcher
+              </div>
+              <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center', flexWrap: 'wrap' }}>
+                <input
+                  type="email"
+                  className="form-input"
+                  placeholder="Enter recipient email (e.g. you@example.com)"
+                  value={testEmailInput}
+                  onChange={(e) => setTestEmailInput(e.target.value)}
+                  style={{ maxWidth: '320px' }}
+                />
+                <button
+                  type="button"
+                  onClick={handleSendTestEmail}
+                  disabled={sendingTestEmail || !testEmailInput.trim()}
+                  className="btn btn-secondary btn-sm"
+                >
+                  <Mail size={14} /> {sendingTestEmail ? 'Sending...' : 'Send Test Email'}
+                </button>
+              </div>
+
+              {smtpTestResult && (
+                <div
+                  style={{
+                    marginTop: '0.75rem',
+                    padding: '0.5rem 0.75rem',
+                    borderRadius: 'var(--radius-sm)',
+                    fontSize: '0.85rem',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '0.5rem',
+                    background: smtpTestResult.success ? 'rgba(52, 211, 153, 0.15)' : 'rgba(244, 63, 94, 0.15)',
+                    border: `1px solid ${smtpTestResult.success ? 'rgba(52, 211, 153, 0.3)' : 'rgba(244, 63, 94, 0.3)'}`,
+                    color: smtpTestResult.success ? '#34d399' : '#fda4af'
+                  }}
+                >
+                  {smtpTestResult.success ? <CheckCircle2 size={16} /> : <AlertTriangle size={16} />}
+                  {smtpTestResult.message}
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* Legal Terms & Privacy Policy Customization */}
+          <div style={{ borderTop: '1px solid var(--border-subtle)', paddingTop: '1.5rem', display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+            <h4 style={{ fontSize: '1.05rem', color: 'var(--accent-cyan)' }}>
+              Legal Agreements & Registration Policy
+            </h4>
+
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+              <input
+                type="checkbox"
+                id="requireTermsToggle"
+                checked={settings.require_terms_on_signup !== 'false'}
+                onChange={(e) => setSettings({ ...settings, require_terms_on_signup: e.target.checked ? 'true' : 'false' })}
+                style={{ cursor: 'pointer' }}
+              />
+              <label htmlFor="requireTermsToggle" style={{ fontSize: '0.9rem', color: '#fff', cursor: 'pointer' }}>
+                Require users to agree to Terms & Emergency 911 Disclaimer on Registration
+              </label>
+            </div>
+
+            <div className="grid-2" style={{ marginTop: '0.5rem' }}>
+              <div className="form-group">
+                <label className="form-label">Terms of Service & 911 Disclaimer (Markdown)</label>
+                <textarea
+                  className="form-input"
+                  rows={8}
+                  value={settings.terms_of_service || ''}
+                  onChange={(e) => setSettings({ ...settings, terms_of_service: e.target.value })}
+                  style={{ fontFamily: 'monospace', fontSize: '0.85rem' }}
+                />
+              </div>
+
+              <div className="form-group">
+                <label className="form-label">Privacy Policy & Zero-Access Storage (Markdown)</label>
+                <textarea
+                  className="form-input"
+                  rows={8}
+                  value={settings.privacy_policy || ''}
+                  onChange={(e) => setSettings({ ...settings, privacy_policy: e.target.value })}
+                  style={{ fontFamily: 'monospace', fontSize: '0.85rem' }}
+                />
+              </div>
             </div>
           </div>
 

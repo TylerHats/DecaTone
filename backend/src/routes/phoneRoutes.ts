@@ -85,9 +85,15 @@ router.get('/settings', async (req: AuthenticatedRequest, res: Response) => {
       deviceId: phone.device_id,
       earpieceVolume: phone.earpiece_volume ?? 80,
       micSensitivity: phone.mic_sensitivity ?? 80,
+      audioProfile: phone.audio_profile || 'vintage_pots',
+      sidetoneLevel: phone.sidetone_level ?? 10,
       ringStyle: phone.ring_style || 'traditional',
       ringCadenceCustom: phone.ring_cadence_custom || '2000,4000',
       ringTimeoutSec: phone.ring_timeout_sec || 25,
+      hardwareProfile: phone.hardware_profile || 'western_electric_500',
+      bellFrequencyHz: phone.bell_frequency_hz ?? 20.0,
+      hookFlashEnabled: phone.hook_flash_enabled !== 0,
+      intercomEnabled: phone.intercom_enabled !== 0,
       isOnline: !!phone.is_online,
       hookState: phone.hook_state,
       callState: phone.call_state,
@@ -104,7 +110,19 @@ router.get('/settings', async (req: AuthenticatedRequest, res: Response) => {
 // Update Phone Hardware Settings
 router.put('/settings', async (req: AuthenticatedRequest, res: Response) => {
   try {
-    const { earpieceVolume, micSensitivity, ringStyle, ringCadenceCustom, ringTimeoutSec } = req.body;
+    const {
+      earpieceVolume,
+      micSensitivity,
+      audioProfile,
+      sidetoneLevel,
+      ringStyle,
+      ringCadenceCustom,
+      ringTimeoutSec,
+      hardwareProfile,
+      bellFrequencyHz,
+      hookFlashEnabled,
+      intercomEnabled
+    } = req.body;
 
     const phone = await queryOne<any>('SELECT * FROM phones WHERE user_id = ?', [req.user!.id]);
     if (!phone) {
@@ -113,30 +131,61 @@ router.put('/settings', async (req: AuthenticatedRequest, res: Response) => {
 
     const newVol = earpieceVolume !== undefined ? Math.max(0, Math.min(100, parseInt(earpieceVolume, 10))) : phone.earpiece_volume;
     const newMic = micSensitivity !== undefined ? Math.max(0, Math.min(100, parseInt(micSensitivity, 10))) : phone.mic_sensitivity;
+    const newAudioProfile = audioProfile || phone.audio_profile || 'vintage_pots';
+    const newSidetone = sidetoneLevel !== undefined ? Math.max(0, Math.min(100, parseInt(sidetoneLevel, 10))) : (phone.sidetone_level ?? 10);
     const newStyle = ringStyle || phone.ring_style;
     const newCadence = ringCadenceCustom || phone.ring_cadence_custom;
     const newTimeout = ringTimeoutSec ? Math.max(5, Math.min(60, parseInt(ringTimeoutSec, 10))) : phone.ring_timeout_sec;
+    const newHardwareProfile = hardwareProfile || phone.hardware_profile || 'western_electric_500';
+    const newBellFreq = bellFrequencyHz !== undefined ? parseFloat(bellFrequencyHz) : (phone.bell_frequency_hz ?? 20.0);
+    const newHookFlash = hookFlashEnabled !== undefined ? (hookFlashEnabled ? 1 : 0) : (phone.hook_flash_enabled ?? 1);
+    const newIntercom = intercomEnabled !== undefined ? (intercomEnabled ? 1 : 0) : (phone.intercom_enabled ?? 1);
 
     await execute(
       `UPDATE phones SET
         earpiece_volume = ?,
         mic_sensitivity = ?,
+        audio_profile = ?,
+        sidetone_level = ?,
         ring_style = ?,
         ring_cadence_custom = ?,
-        ring_timeout_sec = ?
+        ring_timeout_sec = ?,
+        hardware_profile = ?,
+        bell_frequency_hz = ?,
+        hook_flash_enabled = ?,
+        intercom_enabled = ?
        WHERE id = ?`,
-      [newVol, newMic, newStyle, newCadence, newTimeout, phone.id]
+      [
+        newVol,
+        newMic,
+        newAudioProfile,
+        newSidetone,
+        newStyle,
+        newCadence,
+        newTimeout,
+        newHardwareProfile,
+        newBellFreq,
+        newHookFlash,
+        newIntercom,
+        phone.id
+      ]
     );
 
-    // Push new settings to live hardware
+    // Push new settings to live hardware immediately over WebSocket
     phoneSwitchService.pushDeviceSettings(phone.device_id, {
       earpieceVolume: newVol,
       micSensitivity: newMic,
+      audioProfile: newAudioProfile,
+      sidetoneLevel: newSidetone,
       ringStyle: newStyle,
-      ringCadence: newCadence
+      ringCadence: newCadence,
+      bellFrequencyHz: newBellFreq,
+      hardwareProfile: newHardwareProfile,
+      hookFlashEnabled: newHookFlash === 1,
+      intercomEnabled: newIntercom === 1
     });
 
-    return res.json({ message: 'Hardware settings saved and synced to your phone!' });
+    return res.json({ message: 'Hardware and audio DSP settings saved and synced to your phone!' });
   } catch (err) {
     return res.status(500).json({ error: 'Failed to update phone settings' });
   }

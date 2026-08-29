@@ -30,6 +30,12 @@ void onHookStateChanged(bool isOffHook) {
   NetworkClient.sendHookState(isOffHook);
 }
 
+// Callback when user performs a hook flash (~300ms tap) for call transfer
+void onHookFlash() {
+  Serial.println("[Main] ⚡ Hook-Flash Detected! Sending call transfer request...");
+  NetworkClient.sendHookFlash();
+}
+
 void setup() {
   Serial.begin(115200);
   delay(1000);
@@ -45,7 +51,7 @@ void setup() {
   OtaUpdater.begin();
 
   // Initialize Rotary Dial & Hook Switch with callbacks
-  RotaryDial.begin(onDigitDialed, onHookStateChanged);
+  RotaryDial.begin(onDigitDialed, onHookStateChanged, onHookFlash);
 
   // If already provisioned, connect to WiFi & Switchboard WebSocket
   if (!Provisioning.isSetupActive()) {

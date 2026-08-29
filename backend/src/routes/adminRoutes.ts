@@ -11,6 +11,7 @@ import { authenticateToken, requireAdmin, AuthenticatedRequest } from '../middle
 import { runMigrations } from '../db/migrations';
 import { createBackupArchiveInternal, purgeExcessBackups } from '../services/backupScheduler';
 import { phoneSwitchService } from '../services/phoneSwitchService';
+import { EmailService } from '../services/emailService';
 
 const router = Router();
 router.use(authenticateToken, requireAdmin);
@@ -589,6 +590,31 @@ router.post('/branding/logo', uploadLogo.single('logo'), async (req: Authenticat
     });
   } catch (err: any) {
     return res.status(500).json({ error: 'Failed to upload branding logo' });
+  }
+});
+
+// 7.5 Test SMTP Email Configuration
+router.post('/smtp/test', async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const { testEmail } = req.body;
+    const recipient = testEmail?.trim() || req.user?.username;
+
+    if (!recipient || !recipient.includes('@')) {
+      return res.status(400).json({ error: 'A valid recipient email address is required to send a test email' });
+    }
+
+    const protocol = req.headers['x-forwarded-proto'] || req.protocol;
+    const host = req.headers['x-forwarded-host'] || req.headers.host;
+    const baseUrl = `${protocol}://${host}`;
+
+    const result = await EmailService.sendTestEmail(recipient, baseUrl);
+    if (!result.success) {
+      return res.status(400).json({ error: result.message });
+    }
+
+    return res.json({ success: true, message: result.message });
+  } catch (err: any) {
+    return res.status(500).json({ error: `SMTP test error: ${err.message}` });
   }
 });
 

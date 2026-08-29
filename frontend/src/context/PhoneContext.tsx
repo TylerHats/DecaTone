@@ -8,9 +8,15 @@ export interface PhoneDevice {
   callState: 'idle' | 'dialing' | 'ringing' | 'connected' | 'busy';
   earpieceVolume: number;
   micSensitivity: number;
+  audioProfile?: string;
+  sidetoneLevel?: number;
   ringStyle: string;
   ringCadenceCustom: string;
   ringTimeoutSec: number;
+  hardwareProfile?: string;
+  bellFrequencyHz?: number;
+  hookFlashEnabled?: boolean;
+  intercomEnabled?: boolean;
   firmwareVersion?: string;
   rssi?: number;
   ipAddress?: string;
