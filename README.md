@@ -154,17 +154,21 @@ pio run --target upload
 
 ---
 
-## 📚 Documentation & Wiki
+## 📚 Documentation & Official Wiki
 
-- **[Hardware Wiring & Schematics](wiki/Hardware-Wiring-and-Pinouts.md)**
-- **[Firmware Flashing & Provisioning Guide](wiki/Firmware-Flashing-and-Setup.md)**
-- **[Backend & Reverse Proxy Deployment](wiki/Backend-and-Docker-Deployment.md)**
-- **[Phone Numbering, Routing & Dial Codes](wiki/Phone-Numbering-and-Routing.md)**
-- **[Audio Normalization & Bell Ringer Tuning](wiki/Audio-and-Bell-Ringer-Tuning.md)**
-- **[User & Admin Operations Guide](wiki/User-and-Admin-Guide.md)**
-- **[Troubleshooting & FAQ](wiki/Troubleshooting-and-FAQ.md)**
+Explore the full documentation on the **[DecaTone GitHub Wiki](https://github.com/TylerHats/DecaTone/wiki)**:
+
+- **[📖 Wiki Home](https://github.com/TylerHats/DecaTone/wiki)**
+- **[🔌 Hardware Wiring & Schematics](https://github.com/TylerHats/DecaTone/wiki/Hardware-Wiring-and-Pinouts)**
+- **[⚡ Firmware Flashing & Provisioning Guide](https://github.com/TylerHats/DecaTone/wiki/Firmware-Flashing-and-Setup)**
+- **[🐳 Backend & Reverse Proxy Deployment](https://github.com/TylerHats/DecaTone/wiki/Backend-and-Docker-Deployment)**
+- **[🔢 Phone Numbering, Routing & Dial Codes](https://github.com/TylerHats/DecaTone/wiki/Phone-Numbering-and-Routing)**
+- **[🎛️ Audio Normalization & Bell Ringer Tuning](https://github.com/TylerHats/DecaTone/wiki/Audio-and-Bell-Ringer-Tuning)**
+- **[👤 User & Admin Operations Guide](https://github.com/TylerHats/DecaTone/wiki/User-and-Admin-Guide)**
+- **[🔧 Troubleshooting & FAQ](https://github.com/TylerHats/DecaTone/wiki/Troubleshooting-and-FAQ)**
 
 ---
+
 
 ## 📄 License
 
