@@ -72,7 +72,23 @@ async function runVerification() {
   if (chirp.length === 0) throw new Error('In-ear chirp tone generation failed');
   console.log(`✓ In-ear chirp tone synthesized (${chirp.length} bytes PCM)`);
 
-  console.log('\n🎉 ALL HOWLER & DND BREAKTHROUGH TESTS PASSED SUCCESSFULLY!');
+  const comfort = TtsAudioService.generateComfortTone(3.0);
+  if (comfort.length === 0 || comfort.length !== 16000 * 3 * 2) throw new Error('Comfort tone generation failed');
+  console.log(`✓ Call Hold / Park Comfort Tone synthesized (${comfort.length} bytes PCM)`);
+
+  const modem = TtsAudioService.generateModemHandshakeTone(4.0);
+  if (modem.length === 0 || modem.length !== 16000 * 4 * 2) throw new Error('Modem Handshake simulator tone generation failed');
+  console.log(`✓ Modem Handshake Simulator audio synthesized (${modem.length} bytes PCM)`);
+
+  // Verify Migration 10 phone columns
+  const phoneCols = await query<any>("PRAGMA table_info(phones)");
+  const phoneColNames = phoneCols.map(c => c.name);
+  if (!phoneColNames.includes('phone_label') || !phoneColNames.includes('ring_enabled')) {
+    throw new Error('Migration 10 failed: phone_label or ring_enabled missing from phones table');
+  }
+  console.log('✓ Migration 10: phones (phone_label, ring_enabled) verified');
+
+  console.log('\n🎉 ALL HOWLER, DND BREAKTHROUGH & TELEPHONY SUITE TESTS PASSED SUCCESSFULLY!');
   process.exit(0);
 }
 

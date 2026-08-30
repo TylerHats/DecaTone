@@ -61,8 +61,31 @@ router.get('/:id/audio', async (req: AuthenticatedRequest, res: Response) => {
       [id, req.user!.id]
     );
 
-    if (!vm || !vm.audio_url) {
-      return res.status(404).json({ error: 'Voicemail not found' });
+    if (vm.audio_url.startsWith('data:audio/pcm;base64,')) {
+      const b64 = vm.audio_url.replace('data:audio/pcm;base64,', '');
+      const pcmBuffer = Buffer.from(b64, 'base64');
+
+      // Generate valid RIFF/WAVE header (16kHz 16-bit linear PCM mono)
+      const wavHeader = Buffer.alloc(44);
+      wavHeader.write('RIFF', 0);
+      wavHeader.writeUInt32LE(36 + pcmBuffer.length, 4);
+      wavHeader.write('WAVE', 8);
+      wavHeader.write('fmt ', 12);
+      wavHeader.writeUInt32LE(16, 16);
+      wavHeader.writeUInt16LE(1, 20); // PCM
+      wavHeader.writeUInt16LE(1, 22); // mono
+      wavHeader.writeUInt32LE(16000, 24); // 16kHz
+      wavHeader.writeUInt32LE(16000 * 2, 28); // 32kB/s
+      wavHeader.writeUInt16LE(2, 32); // block align
+      wavHeader.writeUInt16LE(16, 34); // 16-bit
+      wavHeader.write('data', 36);
+      wavHeader.writeUInt32LE(pcmBuffer.length, 40);
+
+      const fullWav = Buffer.concat([wavHeader, pcmBuffer]);
+      res.setHeader('Content-Type', 'audio/wav');
+      res.setHeader('Content-Length', fullWav.length);
+      res.setHeader('Cache-Control', 'private, no-cache, no-store');
+      return res.send(fullWav);
     }
 
     const filename = path.basename(vm.audio_url);

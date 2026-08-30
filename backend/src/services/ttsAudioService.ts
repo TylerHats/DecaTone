@@ -122,6 +122,100 @@ export class TtsAudioService {
   }
 
   /**
+   * Generates Vintage Call-Park / On-Hold Comfort Chime:
+   * Repeating gentle 2-tone melodic chime (523Hz C5 and 659Hz E5) every 4 seconds.
+   */
+  public static generateComfortTone(durationSec = 60.0): Buffer {
+    const totalSamples = Math.floor(this.SAMPLE_RATE * durationSec);
+    const buffer = Buffer.alloc(totalSamples * 2);
+
+    for (let i = 0; i < totalSamples; i++) {
+      const t = i / this.SAMPLE_RATE;
+      const cycleTime = t % 4.0; // Repeat every 4 seconds
+      let sample = 0;
+
+      if (cycleTime >= 0 && cycleTime < 0.35) {
+        // Tone 1: 523Hz (C5)
+        const progress = cycleTime / 0.35;
+        const env = Math.exp(-4.0 * progress);
+        sample = Math.sin(2.0 * Math.PI * 523.25 * cycleTime) * env * 0.18 * 32767.0;
+      } else if (cycleTime >= 0.45 && cycleTime < 0.8) {
+        // Tone 2: 659Hz (E5)
+        const progress = (cycleTime - 0.45) / 0.35;
+        const env = Math.exp(-4.0 * progress);
+        sample = Math.sin(2.0 * Math.PI * 659.25 * (cycleTime - 0.45)) * env * 0.18 * 32767.0;
+      }
+
+      buffer.writeInt16LE(Math.max(-32768, Math.min(32767, Math.round(sample))), i * 2);
+    }
+    return buffer;
+  }
+
+  /**
+   * Generates Authentic Dial-Up Modem Handshake & Data Squeal Audio:
+   * 1. 2100Hz V.8 / V.25 Answer Tone with periodic 180-deg phase reversals
+   * 2. V.8 dual-tone probing (980Hz + 1180Hz / 1650Hz + 1850Hz)
+   * 3. V.22bis scrambler rushing white noise & carrier lock whistle (1200Hz / 2400Hz)
+   * 4. 300/1200 baud FSK/QAM modulation squeals and carrier lock
+   */
+  public static generateModemHandshakeTone(durationSec = 8.5): Buffer {
+    const totalSamples = Math.floor(this.SAMPLE_RATE * durationSec);
+    const buffer = Buffer.alloc(totalSamples * 2);
+
+    let noiseSeed = 0x54321;
+    const nextNoise = () => {
+      noiseSeed = (noiseSeed * 1103515245 + 12345) & 0x7fffffff;
+      return (noiseSeed / 0x7fffffff) * 2.0 - 1.0;
+    };
+
+    for (let i = 0; i < totalSamples; i++) {
+      const t = i / this.SAMPLE_RATE;
+      let sample = 0;
+
+      if (t < 0.4) {
+        // Line click & quiet carrier pause
+        sample = (nextNoise() * 0.04) * 32767.0;
+      } else if (t < 3.2) {
+        // Phase 1: 2100Hz ITU-T V.25 Answer Tone with 180-deg phase reversals every 450ms
+        const phaseReversal = Math.floor((t - 0.4) / 0.45) % 2 === 1 ? Math.PI : 0;
+        const tone2100 = Math.sin(2.0 * Math.PI * 2100.0 * t + phaseReversal);
+        // Subtle harmonics and line hiss
+        const hiss = nextNoise() * 0.03;
+        sample = (tone2100 * 0.35 + hiss) * 32767.0;
+      } else if (t < 4.6) {
+        // Phase 2: V.8 CM / JM probing dual-tones (980Hz + 1180Hz / 1650Hz + 1850Hz)
+        const tone1 = Math.sin(2.0 * Math.PI * 980.0 * t);
+        const tone2 = Math.sin(2.0 * Math.PI * 1180.0 * t);
+        const tone3 = Math.sin(2.0 * Math.PI * 1850.0 * t) * 0.5;
+        const hiss = nextNoise() * 0.06;
+        sample = ((tone1 + tone2 + tone3) * 0.18 + hiss) * 32767.0;
+      } else if (t < 6.8) {
+        // Phase 3: V.22bis / V.34 Scrambler rushing white noise & carrier screech
+        const carrier1200 = Math.sin(2.0 * Math.PI * 1200.0 * t) * 0.2;
+        const carrier2400 = Math.sin(2.0 * Math.PI * 2400.0 * t) * 0.15;
+        // Scrambler wideband rushing noise (simulates pseudo-random sequence)
+        const scramblerNoise = nextNoise() * 0.32;
+        sample = (carrier1200 + carrier2400 + scramblerNoise) * 32767.0;
+      } else {
+        // Phase 4: Carrier Lock & FSK Data Transmission Bursts
+        const dataFreq = 1200 + (Math.floor(t * 120) % 2 === 0 ? 150 : -150);
+        const fskTone = Math.sin(2.0 * Math.PI * dataFreq * t) * 0.22;
+        const hiss = nextNoise() * 0.08;
+        sample = (fskTone + hiss) * 32767.0;
+      }
+
+      // Smooth fade-in and fade-out envelope
+      let envelope = 1.0;
+      if (t < 0.1) envelope = t / 0.1;
+      else if (t > durationSec - 0.2) envelope = (durationSec - t) / 0.2;
+
+      buffer.writeInt16LE(Math.max(-32768, Math.min(32767, Math.round(sample * envelope))), i * 2);
+    }
+    return buffer;
+  }
+
+
+  /**
    * Formant-based phonetic voice synthesizer for clean, natural telephone voice audio
    * Generates authentic telephone operator / announcer phonemes at 16kHz PCM
    */

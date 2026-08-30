@@ -1,9 +1,10 @@
 import React, { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
-import { Phone, Users, Sliders, Voicemail, BellRing, PhoneOutgoing, Wifi, WifiOff, Volume2, ShieldCheck, History, ArrowUpRight, ArrowDownLeft, Clock, Zap } from 'lucide-react';
+import { Phone, Users, Sliders, Voicemail, BellRing, PhoneOutgoing, Wifi, WifiOff, Volume2, ShieldCheck, History, ArrowUpRight, ArrowDownLeft, Clock, Zap, PhoneCall } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { usePhone } from '../context/PhoneContext';
 import { InteractiveRotaryDial } from '../components/InteractiveRotaryDial';
+import { WebPhoneModal } from '../components/WebPhoneModal';
 
 interface CallRecord {
   id: number;
@@ -32,6 +33,7 @@ export const HomePage: React.FC = () => {
   const [ringingTest, setRingingTest] = useState(false);
   const [dialing, setDialing] = useState(false);
   const [statusMsg, setStatusMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+  const [showWebPhone, setShowWebPhone] = useState(false);
 
   useEffect(() => {
     fetchSpeedDials();
@@ -124,6 +126,14 @@ export const HomePage: React.FC = () => {
               <Zap size={16} /> Pair Your ESP32-S3 Phone
             </Link>
           )}
+
+          <button
+            type="button"
+            onClick={() => setShowWebPhone(true)}
+            className="btn btn-primary btn-sm"
+          >
+            <PhoneCall size={16} /> Web Softphone
+          </button>
 
           <Link to="/settings" className="btn btn-secondary btn-sm">
             <Sliders size={16} /> Hardware Audio
@@ -352,6 +362,12 @@ export const HomePage: React.FC = () => {
           </div>
         </div>
       </div>
+
+      <WebPhoneModal
+        isOpen={showWebPhone}
+        onClose={() => setShowWebPhone(false)}
+        initialNumber={typedNumber}
+      />
     </div>
   );
 };

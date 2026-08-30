@@ -440,4 +440,113 @@ This system is self-hosted and **never sells or shares your personal information
     await execute("INSERT INTO schema_migrations (version) VALUES (9)");
     console.log("Migration 9 applied successfully.");
   }
+
+  if (currentVersion < 10) {
+    console.log("Running Migration 10: Multi-Phone per Account, Phone Labels & Ring Toggles...");
+    try {
+      await execute(`
+        CREATE TABLE IF NOT EXISTS phones_v10 (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+          device_id TEXT UNIQUE NOT NULL,
+          phone_label TEXT DEFAULT 'Main Phone',
+          ring_enabled INTEGER DEFAULT 1,
+          mac_address TEXT,
+          ip_address TEXT,
+          firmware_version TEXT DEFAULT '1.2.0',
+          rssi INTEGER DEFAULT 0,
+          is_online INTEGER DEFAULT 0,
+          hook_state TEXT DEFAULT 'on_hook',
+          call_state TEXT DEFAULT 'idle',
+          earpiece_volume INTEGER DEFAULT 80,
+          mic_sensitivity INTEGER DEFAULT 80,
+          audio_profile TEXT DEFAULT 'vintage_pots',
+          sidetone_level INTEGER DEFAULT 10,
+          ring_style TEXT DEFAULT 'traditional',
+          ring_cadence_custom TEXT DEFAULT '2000,4000',
+          ring_timeout_sec INTEGER DEFAULT 25,
+          hardware_profile TEXT DEFAULT 'western_electric_500',
+          bell_frequency_hz REAL DEFAULT 20.0,
+          intercom_enabled INTEGER DEFAULT 1,
+          call_forwarding_enabled INTEGER DEFAULT 0,
+          forward_to_number TEXT,
+          last_seen DATETIME,
+          paired_at DATETIME,
+          created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+      `);
+
+      // Copy existing phones into phones_v10
+      await execute(`
+        INSERT OR IGNORE INTO phones_v10 (
+          id, user_id, device_id, mac_address, ip_address, firmware_version, rssi, is_online,
+          hook_state, call_state, earpiece_volume, mic_sensitivity, audio_profile, sidetone_level,
+          ring_style, ring_cadence_custom, ring_timeout_sec, hardware_profile, bell_frequency_hz,
+          intercom_enabled, call_forwarding_enabled, forward_to_number, last_seen, paired_at, created_at
+        )
+        SELECT 
+          id, user_id, device_id, mac_address, ip_address, firmware_version, rssi, is_online,
+          hook_state, call_state, earpiece_volume, mic_sensitivity,
+          COALESCE(audio_profile, 'vintage_pots'),
+          COALESCE(sidetone_level, 10),
+          COALESCE(ring_style, 'traditional'),
+          COALESCE(ring_cadence_custom, '2000,4000'),
+          COALESCE(ring_timeout_sec, 25),
+          COALESCE(hardware_profile, 'western_electric_500'),
+          COALESCE(bell_frequency_hz, 20.0),
+          COALESCE(intercom_enabled, 1),
+          COALESCE(call_forwarding_enabled, 0),
+          forward_to_number, last_seen, paired_at, created_at
+        FROM phones
+      `);
+
+      await execute('DROP TABLE phones');
+      await execute('ALTER TABLE phones_v10 RENAME TO phones');
+      await execute('CREATE INDEX IF NOT EXISTS idx_phones_user ON phones(user_id)');
+      await execute('CREATE INDEX IF NOT EXISTS idx_phones_device ON phones(device_id)');
+    } catch (e) {
+      console.error('Error during migration 10 table rebuild:', e);
+      // Fallback in case table already exists or altered
+      try { await execute(`ALTER TABLE phones ADD COLUMN phone_label TEXT DEFAULT 'Main Phone'`); } catch (err) {}
+      try { await execute(`ALTER TABLE phones ADD COLUMN ring_enabled INTEGER DEFAULT 1`); } catch (err) {}
+    }
+
+    await execute("INSERT INTO schema_migrations (version) VALUES (10)");
+    console.log("Migration 10 applied successfully.");
+  }
+
+  if (currentVersion < 11) {
+    console.log("Running Migration 11: Phone OTA Auto-Update, Server Auto-Update & Icon Branding...");
+    try {
+      await execute(`ALTER TABLE phones ADD COLUMN ota_auto_update_enabled INTEGER DEFAULT 1`);
+    } catch (e) {}
+    try {
+      await execute(`ALTER TABLE phones ADD COLUMN ota_update_time TEXT DEFAULT '03:00'`);
+    } catch (e) {}
+    try {
+      await execute(`ALTER TABLE phones ADD COLUMN ota_update_channel TEXT DEFAULT 'stable'`);
+    } catch (e) {}
+
+    // Default system settings for server auto-update and branding icons
+    const defaults = [
+      ['server_auto_update_enabled', 'false'],
+      ['server_auto_update_channel', 'stable'],
+      ['server_auto_update_time', '03:00'],
+      ['server_auto_update_frequency', 'daily'],
+      ['auto_backup_enabled', 'true'],
+      ['auto_backup_interval', 'daily'],
+      ['auto_backup_time', '02:00'],
+      ['backup_retention_count', '10'],
+      ['favicon_url', '/branding/favicon.png'],
+      ['navbar_icon_url', '/branding/navbar_icon.png']
+    ];
+
+    for (const [k, v] of defaults) {
+      await execute('INSERT OR IGNORE INTO system_settings (key, value) VALUES (?, ?)', [k, v]);
+    }
+
+    await execute("INSERT INTO schema_migrations (version) VALUES (11)");
+    console.log("Migration 11 applied successfully.");
+  }
 }
+

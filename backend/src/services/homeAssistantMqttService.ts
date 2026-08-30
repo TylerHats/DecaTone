@@ -1,6 +1,8 @@
 import mqtt, { MqttClient } from 'mqtt';
 import { query, queryOne, execute } from '../db/connection';
 import { phoneSwitchService } from './phoneSwitchService';
+import { TtsAudioService } from './ttsAudioService';
+import { serviceLinesService } from './serviceLinesService';
 
 export class HomeAssistantMqttService {
   private client: MqttClient | null = null;
@@ -122,7 +124,16 @@ export class HomeAssistantMqttService {
     console.log(`[Home Assistant MQTT] Command received: ${deviceId} -> ${entity} = ${value}`);
 
     if (entity === 'ring') {
-      phoneSwitchService.sendTestRing(deviceId, 'traditional', '2000,4000');
+      const phone = await queryOne<any>('SELECT ring_style, ring_cadence_custom FROM phones WHERE device_id = ?', [deviceId]);
+      phoneSwitchService.sendTestRing(deviceId, phone?.ring_style || 'traditional', phone?.ring_cadence_custom || '2000,4000');
+    } else if (entity === 'ring_enabled') {
+      const isEnabled = value.toUpperCase() === 'ON' || value === '1' || value.toLowerCase() === 'true';
+      await execute('UPDATE phones SET ring_enabled = ? WHERE device_id = ?', [isEnabled ? 1 : 0, deviceId]);
+      this.publishState(`decatone/${deviceId}/ring_enabled/state`, isEnabled ? 'ON' : 'OFF');
+    } else if (entity === 'audio_profile') {
+      await execute('UPDATE phones SET audio_profile = ? WHERE device_id = ?', [value.trim(), deviceId]);
+      phoneSwitchService.pushDeviceSettings(deviceId, { audioProfile: value.trim() });
+      this.publishState(`decatone/${deviceId}/audio_profile/state`, value.trim());
     } else if (entity === 'volume') {
       const vol = parseInt(value, 10);
       if (!isNaN(vol)) {
@@ -144,6 +155,13 @@ export class HomeAssistantMqttService {
         phoneSwitchService.pushDeviceSettings(deviceId, { sidetoneLevel: side });
         this.publishState(`decatone/${deviceId}/sidetone/state`, String(side));
       }
+    } else if (entity === 'announce') {
+      // Play TTS speech direct to earpiece
+      const client = phoneSwitchService.getPhoneClient(deviceId);
+      if (client?.ws) {
+        const pcm = TtsAudioService.synthesizeSpeech(value);
+        serviceLinesService.startRawPcmPlaybackSession(deviceId, pcm, client.ws);
+      }
     }
   }
 
@@ -155,7 +173,8 @@ export class HomeAssistantMqttService {
 
     const deviceId = phone.device_id;
     const cleanId = deviceId.replace(/[^a-zA-Z0-9_-]/g, '_').toLowerCase();
-    const phoneName = user?.display_name || user?.username ? `${user.display_name || user.username}'s Rotary Phone` : `DecaTone Phone (${deviceId})`;
+    const label = phone.phone_label || 'Phone';
+    const phoneName = user?.display_name || user?.username ? `${user.display_name || user.username}'s ${label}` : `DecaTone ${label} (${deviceId})`;
 
     const haDevice = {
       identifiers: [`decatone_${cleanId}`],
@@ -187,7 +206,32 @@ export class HomeAssistantMqttService {
     };
     this.publishJson(`homeassistant/binary_sensor/decatone_${cleanId}_hook/config`, hookConfig);
 
-    // 3. Sensor: Last Dialed Number
+    // 3. Switch: Ring on Incoming Call
+    const ringEnabledConfig = {
+      name: `${phoneName} Ring on Incoming`,
+      unique_id: `decatone_${cleanId}_ring_enabled`,
+      state_topic: `decatone/${deviceId}/ring_enabled/state`,
+      command_topic: `decatone/${deviceId}/ring_enabled/set`,
+      payload_on: 'ON',
+      payload_off: 'OFF',
+      icon: 'mdi:bell',
+      device: haDevice
+    };
+    this.publishJson(`homeassistant/switch/decatone_${cleanId}_ring_enabled/config`, ringEnabledConfig);
+
+    // 4. Select: Audio Profile
+    const profileConfig = {
+      name: `${phoneName} Audio Profile`,
+      unique_id: `decatone_${cleanId}_profile`,
+      state_topic: `decatone/${deviceId}/audio_profile/state`,
+      command_topic: `decatone/${deviceId}/audio_profile/set`,
+      options: ['vintage_pots', 'early_bell', 'modern_hd'],
+      icon: 'mdi:equalizer',
+      device: haDevice
+    };
+    this.publishJson(`homeassistant/select/decatone_${cleanId}_profile/config`, profileConfig);
+
+    // 5. Sensor: Last Dialed Number
     const dialedConfig = {
       name: `${phoneName} Last Dialed Number`,
       unique_id: `decatone_${cleanId}_last_dialed`,
@@ -197,7 +241,7 @@ export class HomeAssistantMqttService {
     };
     this.publishJson(`homeassistant/sensor/decatone_${cleanId}_last_dialed/config`, dialedConfig);
 
-    // 4. Number: Earpiece Volume Slider (0-100)
+    // 6. Number: Earpiece Volume Slider (0-100)
     const volumeConfig = {
       name: `${phoneName} Earpiece Volume`,
       unique_id: `decatone_${cleanId}_volume`,
@@ -211,7 +255,7 @@ export class HomeAssistantMqttService {
     };
     this.publishJson(`homeassistant/number/decatone_${cleanId}_volume/config`, volumeConfig);
 
-    // 5. Number: Mic Gain Slider (0-100)
+    // 7. Number: Mic Gain Slider (0-100)
     const micConfig = {
       name: `${phoneName} Microphone Sensitivity`,
       unique_id: `decatone_${cleanId}_mic_gain`,
@@ -225,14 +269,32 @@ export class HomeAssistantMqttService {
     };
     this.publishJson(`homeassistant/number/decatone_${cleanId}_mic_gain/config`, micConfig);
 
+    // 8. Number: Sidetone Level Slider (0-100)
+    const sidetoneConfig = {
+      name: `${phoneName} Sidetone Level`,
+      unique_id: `decatone_${cleanId}_sidetone`,
+      state_topic: `decatone/${deviceId}/sidetone/state`,
+      command_topic: `decatone/${deviceId}/sidetone/set`,
+      min: 0,
+      max: 100,
+      step: 1,
+      icon: 'mdi:hearing',
+      device: haDevice
+    };
+    this.publishJson(`homeassistant/number/decatone_${cleanId}_sidetone/config`, sidetoneConfig);
+
     // Publish Initial States
     this.publishState(`decatone/${deviceId}/hook/state`, phone.hook_state === 'off_hook' ? 'OFF_HOOK' : 'ON_HOOK');
+    this.publishState(`decatone/${deviceId}/ring_enabled/state`, phone.ring_enabled !== 0 ? 'ON' : 'OFF');
+    this.publishState(`decatone/${deviceId}/audio_profile/state`, phone.audio_profile || 'vintage_pots');
     this.publishState(`decatone/${deviceId}/volume/state`, String(phone.earpiece_volume ?? 80));
     this.publishState(`decatone/${deviceId}/mic_gain/state`, String(phone.mic_sensitivity ?? 80));
+    this.publishState(`decatone/${deviceId}/sidetone/state`, String(phone.sidetone_level ?? 10));
     this.publishState(`decatone/${deviceId}/last_dialed/state`, 'Idle');
 
     console.log(`[Home Assistant MQTT] Auto-Discovery published for ${phoneName} (${deviceId})`);
   }
+
 
   public publishHookState(deviceId: string, isOffHook: boolean) {
     if (!this.isConnected) return;

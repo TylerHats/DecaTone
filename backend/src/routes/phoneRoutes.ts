@@ -2,6 +2,7 @@ import { Router, Request, Response } from 'express';
 import { execute, query, queryOne } from '../db/connection';
 import { authenticateToken, AuthenticatedRequest } from '../middleware/authMiddleware';
 import { phoneSwitchService } from '../services/phoneSwitchService';
+import { homeAssistantMqttService } from '../services/homeAssistantMqttService';
 
 const router = Router();
 
@@ -101,10 +102,7 @@ router.post('/claim-by-code', async (req: AuthenticatedRequest, res: Response) =
 
     const cleanDeviceId = pending.device_id;
 
-    // Check if current user already has another phone paired
-    await execute('UPDATE phones SET user_id = NULL WHERE user_id = ?', [req.user!.id]);
-
-    // Assign phone to this user
+    // Assign phone to this user (preserving any previously paired phones on this account)
     await execute(
       'UPDATE phones SET user_id = ?, paired_at = CURRENT_TIMESTAMP WHERE device_id = ?',
       [req.user!.id, cleanDeviceId]
@@ -122,10 +120,15 @@ router.post('/claim-by-code', async (req: AuthenticatedRequest, res: Response) =
       ringCadence: phone?.ring_cadence_custom || '2000,4000'
     });
 
+    const user = await queryOne<any>('SELECT id, username, display_name FROM users WHERE id = ?', [req.user!.id]);
+    homeAssistantMqttService.registerPhoneDiscovery(phone, user).catch(console.error);
+
     return res.json({
       message: 'Telephone paired successfully to your account!',
       phone: {
         deviceId: cleanDeviceId,
+        phoneLabel: phone?.phone_label || 'Main Phone',
+        ringEnabled: phone?.ring_enabled !== 0,
         isOnline: !!phone?.is_online,
         firmwareVersion: phone?.firmware_version || '1.2.0',
         hardwareProfile: phone?.hardware_profile || 'western_electric_500'
@@ -140,8 +143,14 @@ router.post('/claim-by-code', async (req: AuthenticatedRequest, res: Response) =
 // Bell Frequency Resonance Sweep Calibration
 router.post('/resonance-sweep', async (req: AuthenticatedRequest, res: Response) => {
   try {
-    const { frequencyHz, durationMs } = req.body;
-    const phone = await queryOne<any>('SELECT * FROM phones WHERE user_id = ?', [req.user!.id]);
+    const { frequencyHz, durationMs, deviceId } = req.body;
+    let phone: any = null;
+    if (deviceId) {
+      phone = await queryOne<any>('SELECT * FROM phones WHERE device_id = ? AND user_id = ?', [deviceId, req.user!.id]);
+    } else {
+      phone = await queryOne<any>('SELECT * FROM phones WHERE user_id = ? LIMIT 1', [req.user!.id]);
+    }
+
     if (!phone) {
       return res.status(404).json({ error: 'No phone paired to this account' });
     }
@@ -163,10 +172,57 @@ router.post('/resonance-sweep', async (req: AuthenticatedRequest, res: Response)
   }
 });
 
+// List all phones paired to current user
+router.get('/list', async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const phones = await query<any>(
+      `SELECT id, device_id, phone_label, ring_enabled, earpiece_volume, mic_sensitivity,
+              audio_profile, sidetone_level, ring_style, ring_cadence_custom, ring_timeout_sec,
+              hardware_profile, bell_frequency_hz, intercom_enabled, is_online, hook_state,
+              call_state, firmware_version, rssi, ip_address, last_seen, paired_at,
+              ota_auto_update_enabled, ota_update_time, ota_update_channel
+       FROM phones WHERE user_id = ? ORDER BY id ASC`,
+      [req.user!.id]
+    );
+
+    return res.json({
+      phones: phones.map(p => ({
+        id: p.id,
+        deviceId: p.device_id,
+        phoneLabel: p.phone_label || 'Main Phone',
+        ringEnabled: p.ring_enabled !== 0,
+        earpieceVolume: p.earpiece_volume ?? 80,
+        micSensitivity: p.mic_sensitivity ?? 80,
+        audioProfile: p.audio_profile || 'vintage_pots',
+        sidetoneLevel: p.sidetone_level ?? 10,
+        ringStyle: p.ring_style || 'traditional',
+        ringCadenceCustom: p.ring_cadence_custom || '2000,4000',
+        ringTimeoutSec: p.ring_timeout_sec || 25,
+        hardwareProfile: p.hardware_profile || 'western_electric_500',
+        bellFrequencyHz: p.bell_frequency_hz ?? 20.0,
+        intercomEnabled: p.intercom_enabled !== 0,
+        otaAutoUpdateEnabled: p.ota_auto_update_enabled !== 0,
+        otaUpdateTime: p.ota_update_time || '03:00',
+        otaUpdateChannel: p.ota_update_channel || 'stable',
+        isOnline: !!p.is_online,
+        hookState: p.hook_state,
+        callState: p.call_state,
+        firmwareVersion: p.firmware_version,
+        rssi: p.rssi,
+        ipAddress: p.ip_address,
+        lastSeen: p.last_seen,
+        pairedAt: p.paired_at
+      }))
+    });
+  } catch (err) {
+    return res.status(500).json({ error: 'Failed to list paired phones' });
+  }
+});
+
 // Legacy Claim / Pair by Device ID
 router.post('/claim', async (req: AuthenticatedRequest, res: Response) => {
   try {
-    const { deviceId } = req.body;
+    const { deviceId, label } = req.body;
     if (!deviceId) {
       return res.status(400).json({ error: 'Device ID is required' });
     }
@@ -179,21 +235,18 @@ router.post('/claim', async (req: AuthenticatedRequest, res: Response) => {
     if (!phone) {
       // Allow pre-claiming: create device entry in DB waiting for hardware check-in
       await execute(
-        'INSERT INTO phones (device_id, user_id, paired_at) VALUES (?, ?, CURRENT_TIMESTAMP)',
-        [cleanDeviceId, req.user!.id]
+        'INSERT INTO phones (device_id, user_id, phone_label, paired_at) VALUES (?, ?, ?, CURRENT_TIMESTAMP)',
+        [cleanDeviceId, req.user!.id, label?.trim() || 'Main Phone']
       );
     } else {
       if (phone.user_id && phone.user_id !== req.user!.id) {
         return res.status(400).json({ error: 'This phone is already registered to another user' });
       }
 
-      // Check if current user already has another phone paired
-      await execute('UPDATE phones SET user_id = NULL WHERE user_id = ?', [req.user!.id]);
-
-      // Assign to this user
+      // Assign to this user (preserving existing phones)
       await execute(
-        'UPDATE phones SET user_id = ?, paired_at = CURRENT_TIMESTAMP WHERE device_id = ?',
-        [req.user!.id, cleanDeviceId]
+        'UPDATE phones SET user_id = ?, phone_label = COALESCE(?, phone_label), paired_at = CURRENT_TIMESTAMP WHERE device_id = ?',
+        [req.user!.id, label?.trim() || null, cleanDeviceId]
       );
     }
 
@@ -206,10 +259,15 @@ router.post('/claim', async (req: AuthenticatedRequest, res: Response) => {
       ringCadence: phone?.ring_cadence_custom || '2000,4000'
     });
 
+    const user = await queryOne<any>('SELECT id, username, display_name FROM users WHERE id = ?', [req.user!.id]);
+    homeAssistantMqttService.registerPhoneDiscovery(phone, user).catch(console.error);
+
     return res.json({
       message: 'Phone paired successfully!',
       phone: {
         deviceId: cleanDeviceId,
+        phoneLabel: phone?.phone_label || 'Main Phone',
+        ringEnabled: phone?.ring_enabled !== 0,
         isOnline: !!phone?.is_online,
         firmwareVersion: phone?.firmware_version || '1.2.0'
       }
@@ -220,26 +278,42 @@ router.post('/claim', async (req: AuthenticatedRequest, res: Response) => {
   }
 });
 
-// Unpair Phone
-router.post('/unclaim', async (req: AuthenticatedRequest, res: Response) => {
+// Unpair Phone (Specific or All)
+router.post(['/unclaim', '/unclaim/:deviceId'], async (req: AuthenticatedRequest, res: Response) => {
   try {
-    await execute('UPDATE phones SET user_id = NULL WHERE user_id = ?', [req.user!.id]);
+    const targetDeviceId = req.params.deviceId || req.body.deviceId;
+    if (targetDeviceId) {
+      await execute('UPDATE phones SET user_id = NULL WHERE device_id = ? AND user_id = ?', [targetDeviceId, req.user!.id]);
+    } else {
+      await execute('UPDATE phones SET user_id = NULL WHERE user_id = ?', [req.user!.id]);
+    }
     return res.json({ message: 'Phone unpaired successfully' });
   } catch (err) {
     return res.status(500).json({ error: 'Failed to unpair phone' });
   }
 });
 
-// Get Phone Hardware Settings
-router.get('/settings', async (req: AuthenticatedRequest, res: Response) => {
+// Get Phone Hardware Settings (Primary or Specific Phone)
+router.get(['/settings', '/settings/:deviceId'], async (req: AuthenticatedRequest, res: Response) => {
   try {
-    const phone = await queryOne<any>('SELECT * FROM phones WHERE user_id = ?', [req.user!.id]);
+    const targetDeviceId = req.params.deviceId || (req.query.deviceId as string);
+    let phone: any = null;
+
+    if (targetDeviceId) {
+      phone = await queryOne<any>('SELECT * FROM phones WHERE device_id = ? AND user_id = ?', [targetDeviceId, req.user!.id]);
+    } else {
+      phone = await queryOne<any>('SELECT * FROM phones WHERE user_id = ? ORDER BY id ASC LIMIT 1', [req.user!.id]);
+    }
+
     if (!phone) {
       return res.status(404).json({ error: 'No phone paired to this account' });
     }
 
     return res.json({
+      id: phone.id,
       deviceId: phone.device_id,
+      phoneLabel: phone.phone_label || 'Main Phone',
+      ringEnabled: phone.ring_enabled !== 0,
       earpieceVolume: phone.earpiece_volume ?? 80,
       micSensitivity: phone.mic_sensitivity ?? 80,
       audioProfile: phone.audio_profile || 'vintage_pots',
@@ -249,25 +323,31 @@ router.get('/settings', async (req: AuthenticatedRequest, res: Response) => {
       ringTimeoutSec: phone.ring_timeout_sec || 25,
       hardwareProfile: phone.hardware_profile || 'western_electric_500',
       bellFrequencyHz: phone.bell_frequency_hz ?? 20.0,
-      hookFlashEnabled: phone.hook_flash_enabled !== 0,
       intercomEnabled: phone.intercom_enabled !== 0,
+      otaAutoUpdateEnabled: phone.ota_auto_update_enabled !== 0,
+      otaUpdateTime: phone.ota_update_time || '03:00',
+      otaUpdateChannel: phone.ota_update_channel || 'stable',
       isOnline: !!phone.is_online,
       hookState: phone.hook_state,
       callState: phone.call_state,
       firmwareVersion: phone.firmware_version,
       rssi: phone.rssi,
       ipAddress: phone.ip_address,
-      lastSeen: phone.last_seen
+      lastSeen: phone.last_seen,
+      pairedAt: phone.paired_at
     });
   } catch (err) {
     return res.status(500).json({ error: 'Failed to fetch phone settings' });
   }
 });
 
-// Update Phone Hardware Settings
-router.put('/settings', async (req: AuthenticatedRequest, res: Response) => {
+// Update Phone Hardware Settings (Primary or Specific Phone)
+router.put(['/settings', '/settings/:deviceId'], async (req: AuthenticatedRequest, res: Response) => {
   try {
+    const targetDeviceId = req.params.deviceId || req.body.deviceId;
     const {
+      phoneLabel,
+      ringEnabled,
       earpieceVolume,
       micSensitivity,
       audioProfile,
@@ -277,15 +357,25 @@ router.put('/settings', async (req: AuthenticatedRequest, res: Response) => {
       ringTimeoutSec,
       hardwareProfile,
       bellFrequencyHz,
-      hookFlashEnabled,
-      intercomEnabled
+      intercomEnabled,
+      otaAutoUpdateEnabled,
+      otaUpdateTime,
+      otaUpdateChannel
     } = req.body;
 
-    const phone = await queryOne<any>('SELECT * FROM phones WHERE user_id = ?', [req.user!.id]);
+    let phone: any = null;
+    if (targetDeviceId) {
+      phone = await queryOne<any>('SELECT * FROM phones WHERE device_id = ? AND user_id = ?', [targetDeviceId, req.user!.id]);
+    } else {
+      phone = await queryOne<any>('SELECT * FROM phones WHERE user_id = ? ORDER BY id ASC LIMIT 1', [req.user!.id]);
+    }
+
     if (!phone) {
       return res.status(404).json({ error: 'No phone paired to this account' });
     }
 
+    const newLabel = phoneLabel !== undefined ? phoneLabel.trim() : (phone.phone_label || 'Main Phone');
+    const newRingEnabled = ringEnabled !== undefined ? (ringEnabled ? 1 : 0) : (phone.ring_enabled ?? 1);
     const newVol = earpieceVolume !== undefined ? Math.max(0, Math.min(100, parseInt(earpieceVolume, 10))) : phone.earpiece_volume;
     const newMic = micSensitivity !== undefined ? Math.max(0, Math.min(100, parseInt(micSensitivity, 10))) : phone.mic_sensitivity;
     const newAudioProfile = audioProfile || phone.audio_profile || 'vintage_pots';
@@ -295,11 +385,15 @@ router.put('/settings', async (req: AuthenticatedRequest, res: Response) => {
     const newTimeout = ringTimeoutSec ? Math.max(5, Math.min(60, parseInt(ringTimeoutSec, 10))) : phone.ring_timeout_sec;
     const newHardwareProfile = hardwareProfile || phone.hardware_profile || 'western_electric_500';
     const newBellFreq = bellFrequencyHz !== undefined ? parseFloat(bellFrequencyHz) : (phone.bell_frequency_hz ?? 20.0);
-    const newHookFlash = hookFlashEnabled !== undefined ? (hookFlashEnabled ? 1 : 0) : (phone.hook_flash_enabled ?? 1);
     const newIntercom = intercomEnabled !== undefined ? (intercomEnabled ? 1 : 0) : (phone.intercom_enabled ?? 1);
+    const newOtaEnabled = otaAutoUpdateEnabled !== undefined ? (otaAutoUpdateEnabled ? 1 : 0) : (phone.ota_auto_update_enabled ?? 1);
+    const newOtaTime = otaUpdateTime || phone.ota_update_time || '03:00';
+    const newOtaChannel = otaUpdateChannel || phone.ota_update_channel || 'stable';
 
     await execute(
       `UPDATE phones SET
+        phone_label = ?,
+        ring_enabled = ?,
         earpiece_volume = ?,
         mic_sensitivity = ?,
         audio_profile = ?,
@@ -309,10 +403,14 @@ router.put('/settings', async (req: AuthenticatedRequest, res: Response) => {
         ring_timeout_sec = ?,
         hardware_profile = ?,
         bell_frequency_hz = ?,
-        hook_flash_enabled = ?,
-        intercom_enabled = ?
+        intercom_enabled = ?,
+        ota_auto_update_enabled = ?,
+        ota_update_time = ?,
+        ota_update_channel = ?
        WHERE id = ?`,
       [
+        newLabel,
+        newRingEnabled,
         newVol,
         newMic,
         newAudioProfile,
@@ -322,8 +420,10 @@ router.put('/settings', async (req: AuthenticatedRequest, res: Response) => {
         newTimeout,
         newHardwareProfile,
         newBellFreq,
-        newHookFlash,
         newIntercom,
+        newOtaEnabled,
+        newOtaTime,
+        newOtaChannel,
         phone.id
       ]
     );
@@ -338,9 +438,12 @@ router.put('/settings', async (req: AuthenticatedRequest, res: Response) => {
       ringCadence: newCadence,
       bellFrequencyHz: newBellFreq,
       hardwareProfile: newHardwareProfile,
-      hookFlashEnabled: newHookFlash === 1,
       intercomEnabled: newIntercom === 1
     });
+
+    const updatedPhone = await queryOne<any>('SELECT * FROM phones WHERE id = ?', [phone.id]);
+    const user = await queryOne<any>('SELECT id, username, display_name FROM users WHERE id = ?', [req.user!.id]);
+    homeAssistantMqttService.registerPhoneDiscovery(updatedPhone, user).catch(console.error);
 
     return res.json({ message: 'Hardware and audio DSP settings saved and synced to your phone!' });
   } catch (err) {
@@ -348,29 +451,53 @@ router.put('/settings', async (req: AuthenticatedRequest, res: Response) => {
   }
 });
 
-// Trigger Remote Test Ring
-router.post('/test-ring', async (req: AuthenticatedRequest, res: Response) => {
+// Trigger Remote Test Ring (Specific or All User Phones)
+router.post(['/test-ring', '/test-ring/:deviceId'], async (req: AuthenticatedRequest, res: Response) => {
   try {
-    const phone = await queryOne<any>('SELECT * FROM phones WHERE user_id = ?', [req.user!.id]);
-    if (!phone) {
+    const targetDeviceId = req.params.deviceId || req.body.deviceId;
+    let phones: any[] = [];
+
+    if (targetDeviceId) {
+      const p = await queryOne<any>('SELECT * FROM phones WHERE device_id = ? AND user_id = ?', [targetDeviceId, req.user!.id]);
+      if (p) phones.push(p);
+    } else {
+      phones = await query<any>('SELECT * FROM phones WHERE user_id = ?', [req.user!.id]);
+    }
+
+    if (phones.length === 0) {
       return res.status(404).json({ error: 'No phone paired to this account' });
     }
 
-    const sent = phoneSwitchService.sendTestRing(phone.device_id, phone.ring_style, phone.ring_cadence_custom);
-    if (!sent) {
-      return res.status(400).json({ error: 'Phone is currently offline. Please check its WiFi connection.' });
+    let ringsSent = 0;
+    for (const phone of phones) {
+      if (phone.is_online) {
+        phoneSwitchService.sendTestRing(phone.device_id, phone.ring_style, phone.ring_cadence_custom);
+        ringsSent++;
+      }
     }
 
-    return res.json({ message: 'Test ring sent! Your rotary bell should ring now.' });
+    if (ringsSent === 0) {
+      return res.status(400).json({ error: 'Phone(s) currently offline. Please check WiFi connection.' });
+    }
+
+    return res.json({ message: `Test ring sent to ${ringsSent} phone(s)! Your rotary bells should ring now.` });
   } catch (err) {
     return res.status(500).json({ error: 'Failed to send test ring' });
   }
 });
 
-// Trigger Remote Reboot
-router.post('/reboot', async (req: AuthenticatedRequest, res: Response) => {
+// Trigger Remote Reboot (Specific or Primary Phone)
+router.post(['/reboot', '/reboot/:deviceId'], async (req: AuthenticatedRequest, res: Response) => {
   try {
-    const phone = await queryOne<any>('SELECT * FROM phones WHERE user_id = ?', [req.user!.id]);
+    const targetDeviceId = req.params.deviceId || req.body.deviceId;
+    let phone: any = null;
+
+    if (targetDeviceId) {
+      phone = await queryOne<any>('SELECT * FROM phones WHERE device_id = ? AND user_id = ?', [targetDeviceId, req.user!.id]);
+    } else {
+      phone = await queryOne<any>('SELECT * FROM phones WHERE user_id = ? LIMIT 1', [req.user!.id]);
+    }
+
     if (!phone) {
       return res.status(404).json({ error: 'No phone paired to this account' });
     }
@@ -380,11 +507,49 @@ router.post('/reboot', async (req: AuthenticatedRequest, res: Response) => {
       return res.status(400).json({ error: 'Phone is currently offline' });
     }
 
-    return res.json({ message: 'Reboot command sent to ESP32-S3' });
+    return res.json({ message: `Reboot command sent to ${phone.phone_label || phone.device_id}` });
   } catch (err) {
     return res.status(500).json({ error: 'Failed to reboot phone' });
   }
 });
+
+// Trigger Manual OTA Firmware Update for Specific or Primary Phone
+router.post(['/ota-update', '/ota-update/:deviceId'], async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const targetDeviceId = req.params.deviceId || req.body.deviceId;
+    let phone: any = null;
+
+    if (targetDeviceId) {
+      phone = await queryOne<any>('SELECT * FROM phones WHERE device_id = ? AND user_id = ?', [targetDeviceId, req.user!.id]);
+    } else {
+      phone = await queryOne<any>('SELECT * FROM phones WHERE user_id = ? LIMIT 1', [req.user!.id]);
+    }
+
+    if (!phone) {
+      return res.status(404).json({ error: 'No phone paired to this account' });
+    }
+
+    const versionRow = await queryOne<any>('SELECT value FROM system_settings WHERE key = "firmware_latest_version"');
+    const binUrlRow = await queryOne<any>('SELECT value FROM system_settings WHERE key = "firmware_binary_url"');
+
+    const firmwareVersion = versionRow?.value || '1.2.0';
+    const binaryUrl = binUrlRow?.value || '/api/firmware/download/latest';
+
+    phoneSwitchService.sendToDevice(phone.device_id, {
+      type: 'ota_available',
+      version: firmwareVersion,
+      binaryUrl
+    });
+
+    return res.json({
+      message: `OTA update signal dispatched to ${phone.phone_label || phone.device_id}! Flashing v${firmwareVersion}...`,
+      version: firmwareVersion
+    });
+  } catch (err) {
+    return res.status(500).json({ error: 'Failed to trigger manual OTA update' });
+  }
+});
+
 
 // Speed Dials Management (Slots 1-9)
 router.get('/speed-dials', async (req: AuthenticatedRequest, res: Response) => {
@@ -442,12 +607,22 @@ router.delete('/speed-dials/:slot', async (req: AuthenticatedRequest, res: Respo
 // Dial Extension from Web
 router.post('/dial', async (req: AuthenticatedRequest, res: Response) => {
   try {
-    const { calleeNumber } = req.body;
+    const calleeNumber = (req.body.calleeNumber || req.body.destination || '').trim();
+    const deviceId = req.body.deviceId;
     if (!calleeNumber) {
       return res.status(400).json({ error: 'Destination number required' });
     }
 
-    const phone = await queryOne<any>('SELECT * FROM phones WHERE user_id = ?', [req.user!.id]);
+    let phone: any = null;
+    if (deviceId) {
+      phone = await queryOne<any>('SELECT * FROM phones WHERE device_id = ? AND user_id = ?', [deviceId, req.user!.id]);
+    } else {
+      phone = await queryOne<any>('SELECT * FROM phones WHERE user_id = ? AND is_online = 1 LIMIT 1', [req.user!.id]);
+      if (!phone) {
+        phone = await queryOne<any>('SELECT * FROM phones WHERE user_id = ? LIMIT 1', [req.user!.id]);
+      }
+    }
+
     if (!phone || !phone.is_online) {
       return res.status(400).json({ error: 'Your phone hardware must be online to initiate a call' });
     }
@@ -456,6 +631,19 @@ router.post('/dial', async (req: AuthenticatedRequest, res: Response) => {
     return res.json({ message: `Calling ${calleeNumber}...` });
   } catch (err) {
     return res.status(500).json({ error: 'Failed to place call' });
+  }
+});
+
+// End / Hang Up Active Call from Web UI
+router.post('/hangup', async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const phones = await query<any>('SELECT device_id FROM phones WHERE user_id = ?', [req.user!.id]);
+    for (const p of phones) {
+      await phoneSwitchService.handleCallHangup(p.device_id);
+    }
+    return res.json({ message: 'Call ended' });
+  } catch (err) {
+    return res.status(500).json({ error: 'Failed to hang up call' });
   }
 });
 

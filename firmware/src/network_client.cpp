@@ -138,16 +138,21 @@ void NetworkClientManager::handleJsonCommand(const JsonDocument& doc) {
     uint32_t durationMs = doc["durationMs"] | 6000;
     m_testRingStopTime = millis() + durationMs;
     m_testRingActive = true;
-  } else if (strcmp(type, "call_incoming") == 0) {
+  } else if (strcmp(type, "call_incoming") == 0 || strcmp(type, "incoming_call") == 0) {
     const char* ringStyle = doc["ringStyle"] | "traditional";
-    const char* ringCadence = doc["ringCadence"] | "2000,4000";
+    const char* ringCadence = doc["ringCadence"] | (doc["cadence"] | "2000,4000");
+    if (doc["bellFrequencyHz"].is<float>()) BellRinger.setRingFrequency(doc["bellFrequencyHz"].as<float>());
     BellRinger.startRing(ringStyle, ringCadence);
     m_callState = STATE_RINGING;
     Serial.println("[Switchboard] 🔔 Incoming call! Starting physical bell ringing.");
-  } else if (strcmp(type, "call_start") == 0 || strcmp(type, "call_answered") == 0) {
+  } else if (strcmp(type, "call_start") == 0 || strcmp(type, "call_answered") == 0 || strcmp(type, "call_connected") == 0) {
     BellRinger.stopRing();
     m_callState = STATE_IN_CALL;
     Serial.println("[Switchboard] 📞 Call connected. Active voice streaming session.");
+  } else if (strcmp(type, "stop_ring") == 0) {
+    BellRinger.stopRing();
+    if (m_callState == STATE_RINGING) m_callState = STATE_IDLE;
+    Serial.println("[Switchboard] 🔕 Ringing stopped.");
   } else if (strcmp(type, "call_ended") == 0) {
     BellRinger.stopRing();
     m_callState = STATE_IDLE;

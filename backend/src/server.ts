@@ -5,7 +5,7 @@ import fs from 'fs';
 import https from 'https';
 import http from 'http';
 import { runMigrations } from './db/migrations';
-import { queryOne, execute } from './db/connection';
+import { query, queryOne, execute } from './db/connection';
 import { phoneSwitchService } from './services/phoneSwitchService';
 import { initBackupScheduler } from './services/backupScheduler';
 import { homeAssistantMqttService } from './services/homeAssistantMqttService';
@@ -74,15 +74,25 @@ app.use('/branding', (req, res, next) => {
 // Public Branding Configuration Endpoint
 app.get('/api/branding/public', async (req, res) => {
   try {
-    const appNameRow = await queryOne<any>('SELECT value FROM system_settings WHERE key = "app_name"');
-    const logoUrlRow = await queryOne<any>('SELECT value FROM system_settings WHERE key = "logo_url"');
+    const rows = await query<any>('SELECT key, value FROM system_settings WHERE key IN ("app_name", "logo_url", "favicon_url", "icon_url", "navbar_icon_url")');
+    const map: Record<string, string> = {};
+    rows.forEach(r => { map[r.key] = r.value; });
 
     return res.json({
-      app_name: appNameRow?.value || 'DecaTone',
-      logo_url: logoUrlRow?.value || '/branding/logo.png'
+      app_name: map['app_name'] || 'DecaTone',
+      logo_url: map['logo_url'] || '/branding/logo.png',
+      favicon_url: map['favicon_url'] || '/branding/favicon.png',
+      icon_url: map['icon_url'] || '/branding/icon.png',
+      navbar_icon_url: map['navbar_icon_url'] || '/branding/navbar_icon.png'
     });
   } catch (err) {
-    return res.json({ app_name: 'DecaTone', logo_url: '/branding/logo.png' });
+    return res.json({
+      app_name: 'DecaTone',
+      logo_url: '/branding/logo.png',
+      favicon_url: '/branding/favicon.png',
+      icon_url: '/branding/icon.png',
+      navbar_icon_url: '/branding/navbar_icon.png'
+    });
   }
 });
 
@@ -139,12 +149,14 @@ app.get('/api/health', (req, res) => {
 app.get('/api/firmware/info', async (req, res) => {
   try {
     const versionRow = await queryOne<any>('SELECT value FROM system_settings WHERE key = "firmware_latest_version"');
+    const overrideRow = await queryOne<any>('SELECT value FROM system_settings WHERE key = "custom_firmware_override"');
     const binPath = path.join(firmwareDir, 'firmware_latest.bin');
     const exists = fs.existsSync(binPath);
 
     return res.json({
-      version: versionRow?.value || '1.0.0',
+      version: versionRow?.value || '1.2.0',
       hasBinary: exists,
+      isCustomOverride: overrideRow?.value === '1',
       downloadUrl: exists ? '/api/firmware/download/latest' : null
     });
   } catch (err) {

@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Phone, PhoneOff, Mic, MicOff, Volume2, X, Clock, HelpCircle, Activity, Sparkles, Hash, UserPlus, Radio } from 'lucide-react';
+import { Phone, PhoneOff, Mic, MicOff, Volume2, X, Clock, HelpCircle, Activity, Sparkles, Hash, UserPlus, Radio, PauseCircle } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
-import { usePhone } from '../context/PhoneContext';
+import { softphone, SoftphoneCallState } from '../services/WebAudioSoftphone';
 
 interface WebPhoneModalProps {
   isOpen: boolean;
@@ -10,26 +10,39 @@ interface WebPhoneModalProps {
 }
 
 export const WebPhoneModal: React.FC<WebPhoneModalProps> = ({ isOpen, onClose, initialNumber = '' }) => {
-  const { user, token } = useAuth();
-  const { phone } = usePhone();
+  const { user } = useAuth();
 
   const [dialString, setDialString] = useState(initialNumber);
-  const [callState, setCallState] = useState<'idle' | 'dialing' | 'ringing' | 'connected' | 'ended'>('idle');
+  const [callState, setCallState] = useState<SoftphoneCallState>('idle');
   const [callDuration, setCallDuration] = useState(0);
   const [isMuted, setIsMuted] = useState(false);
   const [callInfo, setCallInfo] = useState<{ number: string; name?: string }>({ number: '' });
   const [inviteInput, setInviteInput] = useState('');
   const [showInviteInput, setShowInviteInput] = useState(false);
+  const [audioProfile, setAudioProfileState] = useState<'vintage_pots' | 'early_1930s' | 'modern_hd'>('vintage_pots');
 
   const audioContextRef = useRef<AudioContext | null>(null);
   const callTimerRef = useRef<any>(null);
-  const wsRef = useRef<WebSocket | null>(null);
 
   useEffect(() => {
     if (initialNumber) {
       setDialString(initialNumber);
     }
   }, [initialNumber]);
+
+  useEffect(() => {
+    softphone.setEvents({
+      onStateChange: (state) => {
+        setCallState(state);
+      },
+      onCallConnected: (info) => {
+        setCallInfo(info);
+      },
+      onCallEnded: () => {
+        setCallState('ended');
+      }
+    });
+  }, []);
 
   useEffect(() => {
     if (callState === 'connected') {
@@ -99,14 +112,7 @@ export const WebPhoneModal: React.FC<WebPhoneModalProps> = ({ isOpen, onClose, i
   const handleDigitClick = (digit: string) => {
     playDtmfDigit(digit);
     if (callState === 'connected') {
-      // Send In-Call Digit to Switchboard
-      if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-        wsRef.current.send(JSON.stringify({
-          type: 'dial_digit',
-          deviceId: `WEB-${user?.id || 'CLIENT'}`,
-          digit
-        }));
-      }
+      softphone.sendInCallDigit(digit);
     } else {
       setDialString(prev => prev + digit);
     }
@@ -115,7 +121,12 @@ export const WebPhoneModal: React.FC<WebPhoneModalProps> = ({ isOpen, onClose, i
   const handleToggleMute = () => {
     const newMuted = !isMuted;
     setIsMuted(newMuted);
+    softphone.setMuted(newMuted);
     handleDigitClick('2'); // In-call Digit 2 toggles mute on the switchboard
+  };
+
+  const handleParkCall = () => {
+    handleDigitClick('8'); // In-call Digit 8 parks the call
   };
 
   const handleAddParticipant = () => {
@@ -144,74 +155,11 @@ export const WebPhoneModal: React.FC<WebPhoneModalProps> = ({ isOpen, onClose, i
 
     const targetNumber = dialString.trim();
     setCallInfo({ number: targetNumber, name: `Line ${targetNumber}` });
-    setCallState('dialing');
-
-    try {
-      // Connect signaling via switchboard
-      const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-      const ws = new WebSocket(`${protocol}//${window.location.host}/ws/phone`);
-      wsRef.current = ws;
-
-      ws.onopen = () => {
-        ws.send(JSON.stringify({
-          type: 'web_client_init',
-          userId: user?.id
-        }));
-
-        // Send dial sequence
-        setTimeout(() => {
-          setCallState('ringing');
-          // Send digit by digit out-of-band
-          for (let i = 0; i < targetNumber.length; i++) {
-            setTimeout(() => {
-              ws.send(JSON.stringify({
-                type: 'dial_digit',
-                deviceId: `WEB-${user?.id || 'CLIENT'}`,
-                digit: targetNumber[i]
-              }));
-            }, i * 150);
-          }
-        }, 600);
-      };
-
-      ws.onmessage = (event) => {
-        try {
-          if (typeof event.data === 'string') {
-            const msg = JSON.parse(event.data);
-            if (msg.type === 'call_connected' || msg.type === 'call_state_change' && msg.state === 'connected') {
-              setCallState('connected');
-            } else if (msg.type === 'call_ended') {
-              setCallState('ended');
-              setTimeout(() => {
-                setCallState('idle');
-              }, 2000);
-            }
-          }
-        } catch (e) {}
-      };
-
-      // Fallback connected simulation for service lines like 411/711/119
-      if (targetNumber === '411' || targetNumber === '711' || targetNumber === '119' || targetNumber === '0') {
-        setTimeout(() => {
-          setCallState('connected');
-        }, 1200);
-      }
-    } catch (err) {
-      setCallState('idle');
-    }
+    await softphone.call(targetNumber, user?.id);
   };
 
   const handleEndCall = () => {
-    if (wsRef.current) {
-      try {
-        wsRef.current.send(JSON.stringify({
-          type: 'call_hangup',
-          deviceId: `WEB-${user?.id || 'CLIENT'}`
-        }));
-        wsRef.current.close();
-      } catch (e) {}
-      wsRef.current = null;
-    }
+    softphone.endCall();
     setCallState('idle');
     setDialString('');
     setIsMuted(false);
@@ -248,7 +196,7 @@ export const WebPhoneModal: React.FC<WebPhoneModalProps> = ({ isOpen, onClose, i
           </div>
           <h2 style={{ fontSize: '1.35rem', margin: 0, fontWeight: 700 }}>In-Browser Softphone</h2>
           <p style={{ color: 'var(--text-muted)', fontSize: '0.8rem', margin: '0.25rem 0 0 0' }}>
-            Test calls, service numbers, and direct dialing from your browser
+            Two-way 16kHz audio softphone with direct service lines and dial codes
           </p>
         </div>
 
@@ -264,7 +212,7 @@ export const WebPhoneModal: React.FC<WebPhoneModalProps> = ({ isOpen, onClose, i
           }}
         >
           <div style={{ fontSize: '0.75rem', color: 'var(--text-dim)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '0.25rem' }}>
-            {callState === 'idle' ? 'Ready to Dial' : callState === 'dialing' ? 'Dialing...' : callState === 'ringing' ? 'Ringing Remote Line...' : callState === 'connected' ? 'Call In Progress' : 'Call Terminated'}
+            {callState === 'idle' ? 'Ready to Dial' : callState === 'dialing' ? 'Dialing...' : callState === 'ringing' ? 'Ringing Remote Line...' : callState === 'connected' ? 'Call Connected (Live 2-Way Audio)' : callState === 'parked' ? 'Call Parked on Hold' : 'Call Terminated'}
           </div>
 
           <div style={{ fontSize: '1.6rem', fontWeight: 700, fontFamily: 'var(--font-mono)', color: '#fff', minHeight: '2.2rem', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
@@ -278,6 +226,40 @@ export const WebPhoneModal: React.FC<WebPhoneModalProps> = ({ isOpen, onClose, i
           )}
         </div>
 
+        {/* Audio Filter Profile Selector */}
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '1rem', background: 'rgba(255,255,255,0.03)', border: '1px solid var(--border-subtle)', borderRadius: 'var(--radius-sm)', padding: '0.4rem 0.6rem' }}>
+          <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+            <Sparkles size={13} color="var(--accent-amber)" /> DSP Filter:
+          </span>
+          <div style={{ display: 'flex', gap: '0.35rem' }}>
+            {[
+              { id: 'vintage_pots', label: 'Vintage POTS' },
+              { id: 'early_1930s', label: '1930s Bell' },
+              { id: 'modern_hd', label: 'Modern HD' }
+            ].map(p => (
+              <button
+                key={p.id}
+                type="button"
+                onClick={() => {
+                  setAudioProfileState(p.id as any);
+                  softphone.setAudioProfile(p.id as any);
+                }}
+                className="btn btn-sm"
+                style={{
+                  fontSize: '0.7rem',
+                  padding: '2px 8px',
+                  background: audioProfile === p.id ? 'var(--accent-cyan)' : 'transparent',
+                  color: audioProfile === p.id ? '#0f172a' : 'var(--text-muted)',
+                  border: `1px solid ${audioProfile === p.id ? 'var(--accent-cyan)' : 'var(--border-subtle)'}`,
+                  fontWeight: audioProfile === p.id ? 700 : 500
+                }}
+              >
+                {p.label}
+              </button>
+            ))}
+          </div>
+        </div>
+
         {/* Dialpad Matrix */}
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '0.65rem', marginBottom: '1.25rem' }}>
           {[
@@ -288,7 +270,7 @@ export const WebPhoneModal: React.FC<WebPhoneModalProps> = ({ isOpen, onClose, i
             { digit: '5', sub: 'JKL' },
             { digit: '6', sub: 'MNO' },
             { digit: '7', sub: 'PQRS' },
-            { digit: '8', sub: 'TUV' },
+            { digit: '8', sub: 'PARK' },
             { digit: '9', sub: 'WXYZ' },
             { digit: '*', sub: 'TONE' },
             { digit: '0', sub: 'VM/REJ' },
@@ -336,14 +318,14 @@ export const WebPhoneModal: React.FC<WebPhoneModalProps> = ({ isOpen, onClose, i
                 </button>
               </div>
             ) : (
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.5rem' }}>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '0.5rem' }}>
                 <button
                   type="button"
                   onClick={handleToggleMute}
                   className={`btn ${isMuted ? 'btn-danger' : 'btn-secondary'} btn-sm`}
                 >
-                  {isMuted ? <MicOff size={15} /> : <Mic size={15} />}
-                  {isMuted ? 'Unmute (2)' : 'Mute Mic (2)'}
+                  {isMuted ? <MicOff size={14} /> : <Mic size={14} />}
+                  {isMuted ? 'Unmute (2)' : 'Mute (2)'}
                 </button>
 
                 <button
@@ -351,7 +333,15 @@ export const WebPhoneModal: React.FC<WebPhoneModalProps> = ({ isOpen, onClose, i
                   onClick={() => setShowInviteInput(true)}
                   className="btn btn-secondary btn-sm"
                 >
-                  <UserPlus size={15} /> Add Caller (3)
+                  <UserPlus size={14} /> Add (3)
+                </button>
+
+                <button
+                  type="button"
+                  onClick={handleParkCall}
+                  className="btn btn-secondary btn-sm"
+                >
+                  <PauseCircle size={14} /> Park (8)
                 </button>
               </div>
             )}
@@ -391,3 +381,4 @@ export const WebPhoneModal: React.FC<WebPhoneModalProps> = ({ isOpen, onClose, i
     </div>
   );
 };
+

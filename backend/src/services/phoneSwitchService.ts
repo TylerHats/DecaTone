@@ -25,7 +25,7 @@ export interface ActiveCall {
   calleeNumber: string;
   calleeName: string;
   sessionKey: string;
-  state: 'ringing' | 'connected' | 'busy' | 'ended' | 'voicemail';
+  state: 'ringing' | 'connected' | 'busy' | 'ended' | 'voicemail' | 'parked';
   startedAt: number;
   connectedAt?: number;
   ringTimeoutTimer?: NodeJS.Timeout;
@@ -39,6 +39,9 @@ export interface ActiveCall {
   mutedDevices?: Set<string>; // Devices with mic muted via digit '2'
   isInviteLeg?: boolean;
   inviteTimer?: NodeJS.Timeout;
+  parkedByUserId?: number;
+  parkedByDeviceId?: string;
+  ringingDevices?: Set<string>; // All physical deviceIds ringing for this incoming call
 }
 
 interface WaitingCall {
@@ -306,7 +309,7 @@ export class PhoneSwitchService {
       }
 
       case 'call_answer': {
-        await this.handleCallAnswer(deviceId);
+        await this.handleCallAnswer(deviceId, msg.callId);
         break;
       }
 
@@ -334,15 +337,32 @@ export class PhoneSwitchService {
       if (serviceLinesService.isLoopbackActive(deviceId)) {
         serviceLinesService.endLoopbackSession(deviceId);
       }
+      serviceLinesService.cancelRingbackTest(deviceId);
 
-      // Check if answering an active incoming call
-      const activeCall = this.findCallByCalleeDevice(deviceId);
-      if (activeCall && activeCall.state === 'ringing') {
-        await this.connectCall(activeCall);
+      // Check 1: Resuming a Parked Call on this user's account
+      const parkedCall = this.findParkedCallForUser(client?.userId);
+      if (parkedCall) {
+        console.log(`[Switch] 🅿️ Resuming parked call on device ${deviceId} for user ${client?.userId}`);
+        await this.resumeParkedCall(parkedCall, deviceId);
         return;
       }
 
-      // Check if someone is actively leaving a voicemail for this user -> Live Voicemail Screening!
+      // Check 2: Party-Line Auto-Join (Another phone on this account is in an active connected call)
+      const existingCall = this.findActiveConnectedCallForUser(client?.userId, deviceId);
+      if (existingCall) {
+        console.log(`[Switch] 👥 Party-Line auto-join on device ${deviceId} into call ${existingCall.id}`);
+        await this.joinPartyLineCall(existingCall, deviceId);
+        return;
+      }
+
+      // Check 3: Answering an active incoming call ringing for this device or user
+      const incomingCall = this.findRingingCallForUserOrDevice(deviceId, client?.userId);
+      if (incomingCall && incomingCall.state === 'ringing') {
+        await this.connectCall(incomingCall, deviceId);
+        return;
+      }
+
+      // Check 4: Live Voicemail Screening!
       if (client?.userId && this.activeVoicemailSessions.has(client.userId)) {
         const vmSession = this.activeVoicemailSessions.get(client.userId)!;
         vmSession.calleeScreeningDeviceId = deviceId;
@@ -393,8 +413,12 @@ export class PhoneSwitchService {
       await execute('UPDATE phones SET call_state = ? WHERE device_id = ?', ['dialing', deviceId]);
       this.startOffHookInactivityTimer(deviceId);
     } else {
-      // Handset placed on hook -> terminate active calls or stop dialing
+      // Handset placed on hook -> check ringback line test or terminate active calls
       this.clearOffHookInactivityTimer(deviceId);
+
+      // Check if this device just hung up to execute Ringback Line Test
+      serviceLinesService.handleRingbackOnHook(deviceId, (dId, uId) => this.executeRingbackTest(dId, uId));
+
       if (serviceLinesService.isLoopbackActive(deviceId)) {
         serviceLinesService.endLoopbackSession(deviceId);
       }
@@ -429,10 +453,14 @@ export class PhoneSwitchService {
         }
       }
 
-      // If in an active call, hang up
+      // If in an active call, check if call is parked
       const activeCall = this.findCallByDevice(deviceId);
       if (activeCall) {
-        await this.terminateCall(activeCall.id, 'hangup', deviceId);
+        if (activeCall.state === 'parked') {
+          console.log(`[Switch] 🅿️ Handset ${deviceId} placed on hook while call ${activeCall.id} remains parked.`);
+        } else {
+          await this.terminateCall(activeCall.id, 'hangup', deviceId);
+        }
       }
     }
   }
@@ -518,7 +546,7 @@ export class PhoneSwitchService {
       }
     }
 
-    // 3. Check Active In-Call Controls (Digits 2 for Mute, 3 for Multi-Party Invite)
+    // 3. Check Active In-Call Controls (Digits 2 for Mute, 3 for Group Invite, 8 for Park/Hold)
     const activeCall = this.findCallByDevice(deviceId);
     if (activeCall && activeCall.state === 'connected') {
       // In-Call Invite State (Dialing target extension after pressing 3)
@@ -566,6 +594,13 @@ export class PhoneSwitchService {
         console.log(`[Switch] 👥 In-Call Group Invite mode started by ${deviceId}. Waiting for extension.`);
         return;
       }
+
+      if (digit === '8') {
+        // Single-Digit In-Call Code 8: Call Park / Hold!
+        await this.parkCall(activeCall, deviceId);
+        return;
+      }
+
       return;
     }
 
@@ -679,19 +714,33 @@ export class PhoneSwitchService {
     this.clearDialBuffer(deviceId);
 
     // 1. Service lines
+    if (buffer === '111') {
+      // 111: Ringback Line Test
+      if (client?.ws) serviceLinesService.startRingbackTestSession(deviceId, client.userId, client.ws);
+      return;
+    }
     if (buffer === '119' || buffer === '099') {
+      // 119: Sidetone & Loopback Echo Test
       if (client?.ws) serviceLinesService.startLoopbackSession(deviceId, client.ws);
       return;
     }
     if (buffer === '411') {
+      // 411: Speaking Clock
       if (client?.ws) serviceLinesService.startSpeakingClockSession(deviceId, client.ws);
       return;
     }
+    if (buffer === '567' || buffer === '300') {
+      // 567: Dial-Up Modem Handshake Simulator
+      if (client?.ws) serviceLinesService.startModemHandshakeSession(deviceId, client.ws);
+      return;
+    }
     if (buffer === '711') {
+      // 711: Local Weather Forecast
       if (client?.ws) serviceLinesService.startWeatherSession(deviceId, client?.ipAddress, client.ws);
       return;
     }
     if (buffer === '069' && client?.userId) {
+      // 069: Call Return
       const lastCall = await queryOne<any>(
         'SELECT caller_number FROM calls WHERE callee_user_id = ? ORDER BY id DESC LIMIT 1',
         [client.userId]
@@ -736,11 +785,11 @@ export class PhoneSwitchService {
       return;
     }
 
-    const targetPhone = await queryOne<any>('SELECT * FROM phones WHERE user_id = ?', [targetUser.id]);
-    const targetClient = targetPhone ? this.phoneClients.get(targetPhone.device_id) : null;
+    const targetPhones = await query<any>('SELECT * FROM phones WHERE user_id = ? AND is_online = 1', [targetUser.id]);
+    const ringingTarget = targetPhones.find(p => p.ring_enabled !== 0) || targetPhones[0];
 
-    if (!targetPhone || !targetClient || !targetPhone.is_online || targetPhone.call_state !== 'idle') {
-      console.log(`[Switch] In-call invite failed: Target ${targetUser.username} is busy or offline`);
+    if (!ringingTarget) {
+      console.log(`[Switch] In-call invite failed: Target ${targetUser.username} is offline`);
       this.sendToDevice(inviterDeviceId, { type: 'play_tone', tone: 'busy' });
       return;
     }
@@ -750,53 +799,54 @@ export class PhoneSwitchService {
     if (!call.participants) {
       call.participants = new Set([call.callerDeviceId, call.calleeDeviceId]);
     }
+    call.participants.add(ringingTarget.device_id);
 
-    const inviteLegDeviceId = targetPhone.device_id;
-    console.log(`[Switch] 👥 Inviting ${targetUser.username} (${targetUser.phone_number}) into Group Call ${call.id}`);
+    const ringStyle = friendship?.ring_style && friendship.ring_style !== 'default' ? friendship.ring_style : (ringingTarget.ring_style || 'traditional');
+    const ringCadence = friendship?.ring_cadence_custom || ringingTarget.ring_cadence_custom || '2000,4000';
 
-    // Ring target with friend's distinctive cadence if set
-    const ringStyle = friendship?.ring_style && friendship.ring_style !== 'default' ? friendship.ring_style : (targetPhone.ring_style || 'traditional');
-    const ringCadence = friendship?.ring_cadence_custom || targetPhone.ring_cadence_custom || '2000,4000';
-
-    this.sendToDevice(inviteLegDeviceId, {
+    this.sendToDevice(ringingTarget.device_id, {
       type: 'incoming_call',
-      callerNumber: inviterClient.phoneNumber || 'Group Call',
-      callerName: `${inviterClient.phoneNumber || 'Friend'} (Group Call)`,
+      callerNumber: call.callerNumber,
+      callerName: `${call.callerName} (Group Call)`,
       ringStyle,
       ringCadence,
-      bellFrequencyHz: targetPhone.bell_frequency_hz ?? 20.0
+      bellFrequencyHz: ringingTarget.bell_frequency_hz ?? 20.0
     });
 
-    this.sendToDevice(inviterDeviceId, { type: 'play_tone', tone: 'ringback' });
-    await execute('UPDATE phones SET call_state = ? WHERE device_id = ?', ['ringing', inviteLegDeviceId]);
-
-    // 20-second timeout for invite leg: if unanswered, cancel leg cleanly with NO voicemail recorded!
-    call.inviteTimer = setTimeout(async () => {
-      const checkPhone = await queryOne<any>('SELECT call_state FROM phones WHERE device_id = ?', [inviteLegDeviceId]);
-      if (checkPhone?.call_state === 'ringing') {
-        console.log(`[Switch] In-call invite to ${targetUser.username} timed out. Canceling invite leg.`);
-        this.sendToDevice(inviteLegDeviceId, { type: 'stop_ring' });
-        this.sendToDevice(inviterDeviceId, { type: 'stop_tone' });
-        this.sendToDevice(inviterDeviceId, { type: 'play_tone', tone: 'chirp' });
-        await execute('UPDATE phones SET call_state = ? WHERE device_id = ?', ['idle', inviteLegDeviceId]);
-      }
-    }, 20000);
+    await execute('UPDATE phones SET call_state = ? WHERE device_id = ?', ['ringing', ringingTarget.device_id]);
+    console.log(`[Switch] 👥 Group invite ringing on ${ringingTarget.device_id} for user ${targetUser.username}`);
   }
 
-  // Initiate Normal Outbound Call
+  // Initiate Outbound Call
   public async initiateCall(callerDeviceId: string, destinationNumber: string) {
     const callerClient = this.phoneClients.get(callerDeviceId);
-    const callerUser = callerClient?.userId ? await queryOne<any>('SELECT * FROM users WHERE id = ?', [callerClient.userId]) : null;
+    const dest = destinationNumber.trim();
 
-    const calleeUser = await queryOne<any>('SELECT * FROM users WHERE phone_number = ?', [destinationNumber.trim()]);
-    if (!calleeUser) {
-      console.log(`[Switch] Call failed: Destination ${destinationNumber} not found.`);
+    if (!dest) {
       this.sendToDevice(callerDeviceId, { type: 'play_tone', tone: 'reorder' });
       return;
     }
 
-    if (callerUser && callerUser.id === calleeUser.id) {
-      console.log(`[Switch] Call failed: Caller dialed own line.`);
+    // Look up caller user
+    const callerUser = callerClient?.userId ? await queryOne<any>('SELECT * FROM users WHERE id = ?', [callerClient.userId]) : null;
+
+    // Direct dialing own number -> route directly to Voicemail Inbox
+    if (callerUser && callerUser.phone_number === dest) {
+      console.log(`[Switch] User on ${callerDeviceId} dialed own number -> Voicemail Inbox`);
+      await this.startVoicemailPlaybackSession(callerDeviceId, callerUser.id);
+      return;
+    }
+
+    // Look up destination user by extension
+    const calleeUser = await queryOne<any>('SELECT * FROM users WHERE phone_number = ?', [dest]);
+    if (!calleeUser) {
+      console.log(`[Switch] Call failed: Extension ${dest} not found.`);
+      this.sendToDevice(callerDeviceId, { type: 'play_tone', tone: 'reorder' });
+      return;
+    }
+
+    if (calleeUser.is_disabled) {
+      console.log(`[Switch] Destination account ${dest} is disabled.`);
       this.sendToDevice(callerDeviceId, { type: 'play_tone', tone: 'busy' });
       return;
     }
@@ -831,7 +881,7 @@ export class PhoneSwitchService {
       if (allowsBreakthrough && lastAttempt && (now - lastAttempt) < 180000) {
         console.log(`[Switch] 🚨 DND Breakthrough! Repeated call from ${callerUser?.phone_number || 'Caller'} within 3 minutes bypassed DND for ${calleeUser.username}.`);
         this.recentDndAttempts.delete(attemptKey);
-        // Continue past DND check to ring the bell
+        // Continue past DND check to ring the bells
       } else {
         if (allowsBreakthrough) {
           this.recentDndAttempts.set(attemptKey, now);
@@ -842,31 +892,35 @@ export class PhoneSwitchService {
       }
     }
 
-    // Find callee hardware phone
-    const calleePhone = await queryOne<any>('SELECT * FROM phones WHERE user_id = ?', [calleeUser.id]);
-    const calleeClient = calleePhone ? this.phoneClients.get(calleePhone.device_id) : null;
+    // Find all callee hardware phones
+    const calleePhones = await query<any>('SELECT * FROM phones WHERE user_id = ? AND is_online = 1', [calleeUser.id]);
 
-    if (!calleePhone || !calleeClient || !calleePhone.is_online) {
-      console.log(`[Switch] Callee phone offline -> routing to voicemail`);
+    if (calleePhones.length === 0) {
+      console.log(`[Switch] Callee has no online phones -> routing to voicemail`);
       await this.routeToVoicemail(callerDeviceId, callerUser?.id, callerUser?.phone_number || 'Unknown', callerUser?.display_name || 'Caller', calleeUser);
       return;
     }
 
-    // Call Waiting Check
-    if (calleePhone.call_state === 'connected') {
+    // Filter ringing phones by ring_enabled toggle
+    const enabledPhones = calleePhones.filter(p => p.ring_enabled !== 0);
+    const phonesToRing = enabledPhones.length > 0 ? enabledPhones : calleePhones;
+    const primaryPhone = phonesToRing[0];
+
+    // Call Waiting Check: if primary is on another call, send call waiting
+    if (primaryPhone.call_state === 'connected') {
       console.log(`[Switch] Callee is on another call. Sending in-ear call waiting tone.`);
-      this.sendToDevice(calleePhone.device_id, { type: 'play_tone', tone: 'call_waiting' });
+      this.sendToDevice(primaryPhone.device_id, { type: 'play_tone', tone: 'call_waiting' });
       this.sendToDevice(callerDeviceId, { type: 'play_tone', tone: 'ringback' });
 
-      const ringTimeoutSec = calleePhone.ring_timeout_sec || 25;
+      const ringTimeoutSec = primaryPhone.ring_timeout_sec || 25;
       const ringTimer = setTimeout(async () => {
-        if (this.waitingCalls.has(calleePhone.device_id)) {
-          this.waitingCalls.delete(calleePhone.device_id);
+        if (this.waitingCalls.has(primaryPhone.device_id)) {
+          this.waitingCalls.delete(primaryPhone.device_id);
           await this.routeToVoicemail(callerDeviceId, callerUser?.id, callerUser?.phone_number || 'Unknown', callerUser?.display_name || 'Caller', calleeUser);
         }
       }, ringTimeoutSec * 1000);
 
-      this.waitingCalls.set(calleePhone.device_id, {
+      this.waitingCalls.set(primaryPhone.device_id, {
         callerDeviceId,
         callerUserId: callerUser?.id,
         callerNumber: callerUser?.phone_number || 'Unknown',
@@ -881,8 +935,8 @@ export class PhoneSwitchService {
     const callId = crypto.randomUUID();
     const sessionKey = crypto.randomBytes(16).toString('hex');
 
-    const ringStyle = friendship?.ring_style && friendship.ring_style !== 'default' ? friendship.ring_style : (calleePhone.ring_style || 'traditional');
-    const ringCadence = friendship?.ring_cadence_custom || calleePhone.ring_cadence_custom || '2000,4000';
+    const ringStyle = friendship?.ring_style && friendship.ring_style !== 'default' ? friendship.ring_style : (primaryPhone.ring_style || 'traditional');
+    const ringCadence = friendship?.ring_cadence_custom || primaryPhone.ring_cadence_custom || '2000,4000';
 
     const newCall: ActiveCall = {
       id: callId,
@@ -890,57 +944,97 @@ export class PhoneSwitchService {
       callerUserId: callerUser?.id,
       callerNumber: callerUser?.phone_number || 'Unknown',
       callerName: callerUser?.display_name || callerUser?.username || 'Caller',
-      calleeDeviceId: calleePhone.device_id,
+      calleeDeviceId: primaryPhone.device_id,
       calleeUserId: calleeUser.id,
       calleeNumber: calleeUser.phone_number,
       calleeName: calleeUser.display_name || calleeUser.username,
       sessionKey,
       state: 'ringing',
-      startedAt: Date.now()
+      startedAt: Date.now(),
+      ringingDevices: new Set(phonesToRing.map(p => p.device_id))
     };
 
-    const ringTimeoutSec = calleePhone.ring_timeout_sec || 25;
+    const ringTimeoutSec = primaryPhone.ring_timeout_sec || 25;
     newCall.ringTimeoutTimer = setTimeout(async () => {
       await this.terminateCall(callId, 'timeout', undefined, true);
     }, ringTimeoutSec * 1000);
 
     this.activeCalls.set(callId, newCall);
 
-    this.sendToDevice(calleePhone.device_id, {
+    // Ring all enabled phones on the callee's account
+    for (const p of phonesToRing) {
+      this.sendToDevice(p.device_id, {
+        type: 'incoming_call',
+        callerNumber: newCall.callerNumber,
+        callerName: newCall.callerName,
+        ringStyle: p.ring_style || ringStyle,
+        ringCadence: p.ring_cadence_custom || ringCadence,
+        bellFrequencyHz: p.bell_frequency_hz ?? 20.0
+      });
+      await execute('UPDATE phones SET call_state = ? WHERE device_id = ?', ['ringing', p.device_id]);
+    }
+
+    // Broadcast incoming call event to web clients
+    this.broadcastToWeb({
       type: 'incoming_call',
+      callId,
+      calleeUserId: calleeUser.id,
       callerNumber: newCall.callerNumber,
-      callerName: newCall.callerName,
-      ringStyle,
-      ringCadence,
-      bellFrequencyHz: calleePhone.bell_frequency_hz ?? 20.0
+      callerName: newCall.callerName
     });
 
     this.sendToDevice(callerDeviceId, { type: 'play_tone', tone: 'ringback' });
-
     await execute('UPDATE phones SET call_state = ? WHERE device_id = ?', ['dialing', callerDeviceId]);
-    await execute('UPDATE phones SET call_state = ? WHERE device_id = ?', ['ringing', calleePhone.device_id]);
   }
 
   // Answer Incoming Call
-  public async handleCallAnswer(deviceId: string) {
-    const call = this.findCallByCalleeDevice(deviceId);
+  public async handleCallAnswer(deviceId: string, callId?: string) {
+    let call: ActiveCall | undefined;
+    if (callId) {
+      call = this.activeCalls.get(callId);
+    }
+    if (!call) {
+      call = this.findCallByCalleeDevice(deviceId);
+    }
+    if (!call) {
+      const client = this.phoneClients.get(deviceId);
+      if (client?.userId) {
+        call = this.findRingingCallForUserOrDevice(deviceId, client.userId);
+      }
+    }
+
     if (call && call.state === 'ringing') {
-      await this.connectCall(call);
+      await this.connectCall(call, deviceId);
     }
   }
 
   // Connect Call & Start Audio
-  public async connectCall(call: ActiveCall) {
+  public async connectCall(call: ActiveCall, answeringDeviceId?: string) {
     if (call.ringTimeoutTimer) {
       clearTimeout(call.ringTimeoutTimer);
       call.ringTimeoutTimer = undefined;
+    }
+
+    if (answeringDeviceId) {
+      call.calleeDeviceId = answeringDeviceId;
     }
 
     call.state = 'connected';
     call.connectedAt = Date.now();
 
     this.sendToDevice(call.callerDeviceId, { type: 'stop_tone' });
-    this.sendToDevice(call.calleeDeviceId, { type: 'stop_ring' });
+
+    // Stop ring on all ringing devices for this call
+    if (call.ringingDevices) {
+      for (const devId of call.ringingDevices) {
+        this.sendToDevice(devId, { type: 'stop_ring' });
+        if (devId !== call.calleeDeviceId) {
+          await execute('UPDATE phones SET call_state = ? WHERE device_id = ?', ['idle', devId]);
+        }
+      }
+    } else if (call.calleeDeviceId) {
+      this.sendToDevice(call.calleeDeviceId, { type: 'stop_ring' });
+    }
 
     this.sendToDevice(call.callerDeviceId, {
       type: 'call_connected',
@@ -949,11 +1043,23 @@ export class PhoneSwitchService {
       sessionKey: call.sessionKey
     });
 
-    this.sendToDevice(call.calleeDeviceId, {
-      type: 'call_connected',
+    if (call.calleeDeviceId) {
+      this.sendToDevice(call.calleeDeviceId, {
+        type: 'call_connected',
+        callerNumber: call.callerNumber,
+        callerName: call.callerName,
+        sessionKey: call.sessionKey
+      });
+    }
+
+    this.broadcastToWeb({
+      type: 'call_state_change',
+      callId: call.id,
+      state: 'connected',
       callerNumber: call.callerNumber,
       callerName: call.callerName,
-      sessionKey: call.sessionKey
+      calleeNumber: call.calleeNumber,
+      calleeName: call.calleeName
     });
 
     await execute('UPDATE phones SET call_state = ? WHERE device_id IN (?, ?)', ['connected', call.callerDeviceId, call.calleeDeviceId]);
@@ -964,7 +1070,7 @@ export class PhoneSwitchService {
       [call.callerUserId, call.calleeUserId, call.callerNumber, call.calleeNumber]
     );
 
-    console.log(`[Switch] 📞 Call ${call.id} CONNECTED between ${call.callerNumber} and ${call.calleeNumber}`);
+    console.log(`[Switch] 📞 Call ${call.id} CONNECTED between ${call.callerNumber} and ${call.calleeNumber} (Answered by ${call.calleeDeviceId})`);
   }
 
   // Route to Voicemail
@@ -1026,21 +1132,41 @@ export class PhoneSwitchService {
   public async startVoicemailPlaybackSession(deviceId: string, userId: number) {
     const client = this.phoneClients.get(deviceId);
     const voicemails = await query<any>(
-      'SELECT id, caller_number, audio_url, duration_sec, created_at FROM voicemails WHERE user_id = ? ORDER BY id DESC LIMIT 10',
+      'SELECT id, caller_number, audio_url, duration_sec, created_at FROM voicemails WHERE user_id = ? ORDER BY id DESC LIMIT 5',
       [userId]
     );
 
     if (voicemails.length === 0) {
-      const speech = TtsAudioService.synthesizeSpeech('You have no new messages in your inbox');
+      const speech = TtsAudioService.synthesizeSpeech('You have no messages in your voicemail inbox.');
       if (client?.ws) serviceLinesService.startRawPcmPlaybackSession(deviceId, speech, client.ws);
       return;
     }
 
-    this.sendToDevice(deviceId, {
-      type: 'play_voicemail_list',
-      count: voicemails.length,
-      voicemails
-    });
+    // Synthesize full audio mailbox playlist
+    const audioParts: Buffer[] = [];
+    const countText = `You have ${voicemails.length} ${voicemails.length === 1 ? 'message' : 'messages'} in your voicemail inbox.`;
+    audioParts.push(TtsAudioService.synthesizeSpeech(countText));
+    audioParts.push(Buffer.alloc(TtsAudioService.SAMPLE_RATE * 0.8 * 2)); // 800ms silence
+
+    for (let i = 0; i < voicemails.length; i++) {
+      const vm = voicemails[i];
+      const callerText = `Message ${i + 1} from extension ${vm.caller_number}.`;
+      audioParts.push(TtsAudioService.synthesizeSpeech(callerText));
+      audioParts.push(TtsAudioService.generateSineTone(800, 200, 0.4)); // In-ear pip tone
+      audioParts.push(Buffer.alloc(TtsAudioService.SAMPLE_RATE * 0.4 * 2));
+
+      if (vm.audio_url && vm.audio_url.startsWith('data:audio/pcm;base64,')) {
+        const pcm = Buffer.from(vm.audio_url.replace('data:audio/pcm;base64,', ''), 'base64');
+        audioParts.push(pcm);
+      }
+      audioParts.push(Buffer.alloc(TtsAudioService.SAMPLE_RATE * 1.0 * 2));
+    }
+
+    audioParts.push(TtsAudioService.synthesizeSpeech('End of messages.'));
+    const fullMailboxAudio = Buffer.concat(audioParts);
+    if (client?.ws) {
+      serviceLinesService.startRawPcmPlaybackSession(deviceId, fullMailboxAudio, client.ws);
+    }
   }
 
   // Terminate Call
@@ -1082,9 +1208,16 @@ export class PhoneSwitchService {
     // End call completely
     this.activeCalls.delete(callId);
 
+    this.broadcastToWeb({
+      type: 'call_ended',
+      callId,
+      reason
+    });
+
     const devicesToNotify = call.participants ? Array.from(call.participants) : [call.callerDeviceId, call.calleeDeviceId];
     for (const devId of devicesToNotify) {
       if (devId) {
+        serviceLinesService.stopRawPcmPlaybackSession(devId);
         this.sendToDevice(devId, { type: 'call_ended', reason });
         await execute('UPDATE phones SET call_state = ? WHERE device_id = ?', ['idle', devId]);
         const phone = await queryOne<any>('SELECT hook_state FROM phones WHERE device_id = ?', [devId]);
@@ -1159,7 +1292,7 @@ export class PhoneSwitchService {
     }
   }
 
-  private sendToDevice(deviceId: string, payload: any) {
+  public sendToDevice(deviceId: string, payload: any) {
     const client = this.phoneClients.get(deviceId);
     if (client && client.ws.readyState === WebSocket.OPEN) {
       client.ws.send(JSON.stringify(payload));
@@ -1170,6 +1303,152 @@ export class PhoneSwitchService {
     const dialObj = this.dialedBuffers.get(deviceId);
     if (dialObj?.timer) clearTimeout(dialObj.timer);
     this.dialedBuffers.delete(deviceId);
+  }
+
+  public findParkedCallForUser(userId?: number): ActiveCall | undefined {
+    if (!userId) return undefined;
+    for (const call of this.activeCalls.values()) {
+      if (call.state === 'parked' && (call.parkedByUserId === userId || call.callerUserId === userId || call.calleeUserId === userId)) {
+        return call;
+      }
+    }
+    return undefined;
+  }
+
+  public findActiveConnectedCallForUser(userId?: number, excludeDeviceId?: string): ActiveCall | undefined {
+    if (!userId) return undefined;
+    for (const call of this.activeCalls.values()) {
+      if (call.state === 'connected' && (call.callerUserId === userId || call.calleeUserId === userId)) {
+        if (call.callerDeviceId !== excludeDeviceId && call.calleeDeviceId !== excludeDeviceId && (!call.participants || !call.participants.has(excludeDeviceId || ''))) {
+          return call;
+        }
+      }
+    }
+    return undefined;
+  }
+
+  public findRingingCallForUserOrDevice(deviceId: string, userId?: number): ActiveCall | undefined {
+    for (const call of this.activeCalls.values()) {
+      if (call.state === 'ringing') {
+        if (call.calleeDeviceId === deviceId || (call.ringingDevices && call.ringingDevices.has(deviceId)) || (userId && call.calleeUserId === userId)) {
+          return call;
+        }
+      }
+    }
+    return undefined;
+  }
+
+  public async joinPartyLineCall(call: ActiveCall, deviceId: string) {
+    call.isGroupCall = true;
+    if (!call.participants) {
+      call.participants = new Set([call.callerDeviceId, call.calleeDeviceId]);
+    }
+    call.participants.add(deviceId);
+
+    this.sendToDevice(deviceId, { type: 'stop_tone' });
+    this.sendToDevice(deviceId, {
+      type: 'call_connected',
+      callerNumber: call.callerNumber,
+      callerName: call.callerName,
+      sessionKey: call.sessionKey
+    });
+
+    // Notify other participants with an in-ear chirp
+    for (const pDevId of call.participants) {
+      if (pDevId !== deviceId) {
+        this.sendToDevice(pDevId, { type: 'play_tone', tone: 'chirp' });
+      }
+    }
+
+    await execute('UPDATE phones SET call_state = ? WHERE device_id = ?', ['connected', deviceId]);
+    console.log(`[Switch] 👥 Device ${deviceId} joined active Party-Line call ${call.id}`);
+  }
+
+  public async parkCall(call: ActiveCall, deviceId: string) {
+    const client = this.phoneClients.get(deviceId);
+    call.state = 'parked';
+    call.parkedByUserId = client?.userId;
+    call.parkedByDeviceId = deviceId;
+
+    // Send comfort chime to other party
+    const peerDeviceId = deviceId === call.callerDeviceId ? call.calleeDeviceId : call.callerDeviceId;
+    const peerClient = this.phoneClients.get(peerDeviceId);
+    if (peerClient?.ws) {
+      const comfortPcm = TtsAudioService.generateComfortTone(180.0);
+      serviceLinesService.startRawPcmPlaybackSession(peerDeviceId, comfortPcm, peerClient.ws);
+    }
+
+    this.sendToDevice(deviceId, { type: 'play_tone', tone: 'chirp' });
+    await execute('UPDATE phones SET call_state = ? WHERE device_id = ?', ['idle', deviceId]);
+    this.broadcastToWeb({
+      type: 'call_state_change',
+      callId: call.id,
+      state: 'parked',
+      callerNumber: call.callerNumber,
+      callerName: call.callerName,
+      calleeNumber: call.calleeNumber,
+      calleeName: call.calleeName
+    });
+    console.log(`[Switch] 🅿️ Call ${call.id} PARKED by device ${deviceId} (User ${client?.userId})`);
+  }
+
+  public async resumeParkedCall(call: ActiveCall, deviceId: string) {
+    const client = this.phoneClients.get(deviceId);
+    call.state = 'connected';
+
+    if (call.callerUserId === client?.userId) {
+      call.callerDeviceId = deviceId;
+    } else {
+      call.calleeDeviceId = deviceId;
+    }
+
+    // Stop hold music / comfort tone on peer device
+    serviceLinesService.stopRawPcmPlaybackSession(call.callerDeviceId);
+    serviceLinesService.stopRawPcmPlaybackSession(call.calleeDeviceId);
+
+    this.sendToDevice(deviceId, { type: 'stop_tone' });
+    this.sendToDevice(call.callerDeviceId, {
+      type: 'call_connected',
+      calleeNumber: call.calleeNumber,
+      calleeName: call.calleeName,
+      sessionKey: call.sessionKey
+    });
+    this.sendToDevice(call.calleeDeviceId, {
+      type: 'call_connected',
+      callerNumber: call.callerNumber,
+      callerName: call.callerName,
+      sessionKey: call.sessionKey
+    });
+
+    this.broadcastToWeb({
+      type: 'call_state_change',
+      callId: call.id,
+      state: 'connected',
+      callerNumber: call.callerNumber,
+      callerName: call.callerName,
+      calleeNumber: call.calleeNumber,
+      calleeName: call.calleeName
+    });
+
+    await execute('UPDATE phones SET call_state = ? WHERE device_id = ?', ['connected', deviceId]);
+    console.log(`[Switch] 🅿️ Parked Call ${call.id} RESUMED on device ${deviceId}`);
+  }
+
+  public async executeRingbackTest(deviceId: string, userId?: number) {
+    let phones: any[] = [];
+    if (userId) {
+      phones = await query<any>('SELECT * FROM phones WHERE user_id = ? AND is_online = 1', [userId]);
+    } else {
+      const p = await queryOne<any>('SELECT * FROM phones WHERE device_id = ?', [deviceId]);
+      if (p) phones.push(p);
+    }
+
+    const enabled = phones.filter(p => p.ring_enabled !== 0);
+    const toRing = enabled.length > 0 ? enabled : phones;
+
+    for (const phone of toRing) {
+      this.sendTestRing(phone.device_id, phone.ring_style || 'traditional', phone.ring_cadence_custom || '2000,4000');
+    }
   }
 
   private findCallByDevice(deviceId: string): ActiveCall | undefined {

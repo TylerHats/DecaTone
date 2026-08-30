@@ -12,7 +12,7 @@ export interface PhoneConfig {
 }
 
 export const RESERVED_NUMBERS = [
-  '0', '00', '099', '119', '411', '711', '911', '611', '999', '112', '069', '072', '073'
+  '0', '00', '099', '111', '119', '300', '411', '567', '611', '711', '911', '999', '112', '069', '072', '073', '078', '079'
 ];
 
 export const RESERVED_PREFIXES = ['0'];
@@ -24,7 +24,15 @@ export function isReservedNumberOrPrefix(numberStr: string): boolean {
     if (numberStr.startsWith(pfx)) return true;
   }
   // Reserved 3-digit service prefixes
-  if (numberStr.startsWith('411') || numberStr.startsWith('711') || numberStr.startsWith('119') || numberStr.startsWith('911')) {
+  if (
+    numberStr.startsWith('111') ||
+    numberStr.startsWith('119') ||
+    numberStr.startsWith('300') ||
+    numberStr.startsWith('411') ||
+    numberStr.startsWith('567') ||
+    numberStr.startsWith('711') ||
+    numberStr.startsWith('911')
+  ) {
     return true;
   }
   return false;

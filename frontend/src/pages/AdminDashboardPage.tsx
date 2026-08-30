@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import {
   Shield, Users, Cpu, Database, RefreshCw, Upload, Download, Trash2, Key,
   Lock, AlertTriangle, CheckCircle2, Sliders, BellRing, Smartphone, Server,
-  Globe, Mail, FileArchive, ArrowUpRight
+  Globe, Mail, FileArchive, ArrowUpRight, Clock, ExternalLink, HelpCircle, BookOpen, Sparkles, RotateCcw
 } from 'lucide-react';
 import { useBranding } from '../context/BrandingContext';
 
@@ -36,19 +36,32 @@ export const AdminDashboardPage: React.FC = () => {
   const [creatingBackup, setCreatingBackup] = useState(false);
   const [restoreFile, setRestoreFile] = useState<File | null>(null);
   const [restoring, setRestoring] = useState(false);
+  const [autoBackupEnabled, setAutoBackupEnabled] = useState(true);
+  const [autoBackupInterval, setAutoBackupInterval] = useState('daily');
+  const [autoBackupTime, setAutoBackupTime] = useState('02:00');
+  const [backupRetentionCount, setBackupRetentionCount] = useState(10);
+  const [savingBackupSettings, setSavingBackupSettings] = useState(false);
 
   // Updates
   const [updateInfo, setUpdateInfo] = useState<any>(null);
   const [checkingUpdate, setCheckingUpdate] = useState(false);
   const [applyingUpdate, setApplyingUpdate] = useState(false);
+  const [serverAutoUpdateEnabled, setServerAutoUpdateEnabled] = useState(false);
+  const [serverAutoUpdateChannel, setServerAutoUpdateChannel] = useState('stable');
+  const [serverAutoUpdateTime, setServerAutoUpdateTime] = useState('03:00');
+  const [serverAutoUpdateFrequency, setServerAutoUpdateFrequency] = useState('daily');
+  const [savingUpdateSettings, setSavingUpdateSettings] = useState(false);
 
-  // Settings
+  // Settings & Branding
   const [settings, setSettings] = useState<Record<string, string>>({});
   const [logoFile, setLogoFile] = useState<File | null>(null);
+  const [faviconFile, setFaviconFile] = useState<File | null>(null);
+  const [navbarIconFile, setNavbarIconFile] = useState<File | null>(null);
   const [savingSettings, setSavingSettings] = useState(false);
   const [testEmailInput, setTestEmailInput] = useState('');
   const [sendingTestEmail, setSendingTestEmail] = useState(false);
   const [smtpTestResult, setSmtpTestResult] = useState<{ success: boolean; message: string } | null>(null);
+  const [broadcastingOta, setBroadcastingOta] = useState(false);
 
   // Diagnostics
   const [healthInfo, setHealthInfo] = useState<any>(null);
@@ -64,10 +77,38 @@ export const AdminDashboardPage: React.FC = () => {
     fetchFleet();
     fetchFirmwareInfo();
     fetchBackups();
+    fetchBackupSettings();
     fetchUpdateCheck();
+    fetchUpdateSettings();
     fetchSettings();
     fetchHealth();
   }, []);
+
+  const fetchBackupSettings = async () => {
+    try {
+      const res = await fetch('/api/admin/backups/settings', { headers: { Authorization: `Bearer ${token}` } });
+      if (res.ok) {
+        const data = await res.json();
+        setAutoBackupEnabled(data.autoBackupEnabled);
+        setAutoBackupInterval(data.autoBackupInterval);
+        setAutoBackupTime(data.autoBackupTime);
+        setBackupRetentionCount(data.backupRetentionCount);
+      }
+    } catch (e) {}
+  };
+
+  const fetchUpdateSettings = async () => {
+    try {
+      const res = await fetch('/api/admin/update/settings', { headers: { Authorization: `Bearer ${token}` } });
+      if (res.ok) {
+        const data = await res.json();
+        setServerAutoUpdateEnabled(data.autoUpdateEnabled);
+        setServerAutoUpdateChannel(data.autoUpdateChannel);
+        setServerAutoUpdateTime(data.autoUpdateTime);
+        setServerAutoUpdateFrequency(data.autoUpdateFrequency);
+      }
+    } catch (e) {}
+  };
 
   const fetchMetrics = async () => {
     try {
@@ -365,6 +406,91 @@ export const AdminDashboardPage: React.FC = () => {
     } catch (e) {}
   };
 
+  // Backups Settings Action
+  const handleSaveBackupSettings = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setSavingBackupSettings(true);
+    try {
+      const res = await fetch('/api/admin/backups/settings', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({
+          autoBackupEnabled,
+          autoBackupInterval,
+          autoBackupTime,
+          backupRetentionCount
+        })
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setToast({ type: 'success', text: data.message });
+      } else {
+        setToast({ type: 'error', text: data.error });
+      }
+    } catch (e) {}
+    setSavingBackupSettings(false);
+  };
+
+  // Server Auto-Update Settings Action
+  const handleSaveUpdateSettings = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setSavingUpdateSettings(true);
+    try {
+      const res = await fetch('/api/admin/update/settings', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({
+          autoUpdateEnabled: serverAutoUpdateEnabled,
+          autoUpdateChannel: serverAutoUpdateChannel,
+          autoUpdateTime: serverAutoUpdateTime,
+          autoUpdateFrequency: serverAutoUpdateFrequency
+        })
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setToast({ type: 'success', text: data.message });
+        fetchUpdateCheck();
+      } else {
+        setToast({ type: 'error', text: data.error });
+      }
+    } catch (e) {}
+    setSavingUpdateSettings(false);
+  };
+
+  // Broadcast OTA to fleet
+  const handleBroadcastOta = async () => {
+    if (!window.confirm('Broadcast OTA update command to all currently online physical rotary phones?')) return;
+    setBroadcastingOta(true);
+    try {
+      const res = await fetch('/api/admin/firmware/ota-broadcast', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setToast({ type: 'success', text: data.message });
+      } else {
+        setToast({ type: 'error', text: data.error });
+      }
+    } catch (e) {}
+    setBroadcastingOta(false);
+  };
+
+  const handleResetFirmwareOverride = async () => {
+    if (!window.confirm('Clear custom firmware override and revert to the official release binary?')) return;
+    try {
+      const res = await fetch('/api/admin/firmware/reset-override', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setToast({ type: 'success', text: data.message });
+        fetchFirmwareInfo();
+      }
+    } catch (e) {}
+  };
+
   // Settings Actions
   const handleSaveSettings = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -389,10 +515,48 @@ export const AdminDashboardPage: React.FC = () => {
         setLogoFile(null);
       }
 
+      // 3. Upload Favicon if selected
+      if (faviconFile) {
+        const formData = new FormData();
+        formData.append('favicon', faviconFile);
+        await fetch('/api/admin/branding/favicon', {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${token}` },
+          body: formData
+        });
+        setFaviconFile(null);
+      }
+
+      // 4. Upload Navbar Icon if selected
+      if (navbarIconFile) {
+        const formData = new FormData();
+        formData.append('navbar_icon', navbarIconFile);
+        await fetch('/api/admin/branding/navbar-icon', {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${token}` },
+          body: formData
+        });
+        setNavbarIconFile(null);
+      }
+
       await refreshBranding();
-      setToast({ type: 'success', text: 'System settings & whitelabel configuration saved!' });
+      setToast({ type: 'success', text: 'System settings & brand assets saved!' });
     } catch (e) {}
     setSavingSettings(false);
+  };
+
+  const handleResetBranding = async () => {
+    if (!window.confirm('Reset brand logo, favicons, and program icons to factory defaults?')) return;
+    try {
+      const res = await fetch('/api/admin/branding/reset', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      if (res.ok) {
+        await refreshBranding();
+        setToast({ type: 'success', text: 'Branding assets reset to default' });
+      }
+    } catch (e) {}
   };
 
   const handleSendTestEmail = async (e: React.FormEvent) => {
@@ -721,13 +885,25 @@ export const AdminDashboardPage: React.FC = () => {
       {/* TAB 3: HARDWARE FLEET INSPECTOR */}
       {activeTab === 'fleet' && (
         <div className="glass-card">
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.25rem' }}>
-            <h3 style={{ fontSize: '1.15rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-              <Cpu size={18} color="var(--accent-amber)" /> Connected ESP32-S3 Hardware Fleet
-            </h3>
-            <button onClick={fetchFleet} className="btn btn-secondary btn-sm">
-              <RefreshCw size={14} /> Refresh Fleet
-            </button>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.25rem', flexWrap: 'wrap', gap: '0.75rem' }}>
+            <div>
+              <h3 style={{ fontSize: '1.15rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                <Cpu size={18} color="var(--accent-amber)" /> Connected ESP32-S3 Hardware Fleet
+              </h3>
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
+              <a
+                href="https://github.com/TylerHats/DecaTone/wiki/Hardware-Wiring-and-Pinouts"
+                target="_blank"
+                rel="noopener noreferrer"
+                style={{ color: 'var(--accent-amber)', fontSize: '0.8rem', display: 'flex', alignItems: 'center', gap: '0.35rem', textDecoration: 'none' }}
+              >
+                <HelpCircle size={14} /> Hardware & Wiring Wiki <ExternalLink size={12} />
+              </a>
+              <button onClick={fetchFleet} className="btn btn-secondary btn-sm">
+                <RefreshCw size={14} /> Refresh Fleet
+              </button>
+            </div>
           </div>
 
           <div className="table-container">
@@ -813,41 +989,69 @@ export const AdminDashboardPage: React.FC = () => {
       {/* TAB 4: FIRMWARE OTA MANAGER */}
       {activeTab === 'ota' && (
         <div className="glass-card highlight-cyan">
-          <h3 style={{ fontSize: '1.15rem', marginBottom: '0.5rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-            <Smartphone size={20} color="var(--accent-cyan)" /> ESP32-S3 Over-The-Air (OTA) Firmware Manager
-          </h3>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '0.75rem', marginBottom: '0.5rem' }}>
+            <h3 style={{ fontSize: '1.15rem', display: 'flex', alignItems: 'center', gap: '0.5rem', margin: 0 }}>
+              <Smartphone size={20} color="var(--accent-cyan)" /> ESP32-S3 Over-The-Air (OTA) Firmware Manager
+            </h3>
+            <a
+              href="https://github.com/TylerHats/DecaTone/wiki/Firmware-Flashing-and-Setup"
+              target="_blank"
+              rel="noopener noreferrer"
+              style={{ color: 'var(--accent-cyan)', fontSize: '0.8rem', display: 'flex', alignItems: 'center', gap: '0.35rem', textDecoration: 'none' }}
+            >
+              <HelpCircle size={14} /> Custom Firmware Format & Wiki Guide <ExternalLink size={12} />
+            </a>
+          </div>
+
           <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem', marginBottom: '1.5rem' }}>
-            Upload a compiled <code style={{ fontFamily: 'var(--font-mono)' }}>firmware.bin</code> binary to publish a new firmware release. Connected ESP32-S3 boards will automatically receive the OTA update notification.
+            Upload a custom compiled <code style={{ fontFamily: 'var(--font-mono)' }}>firmware.bin</code> binary to override the official distribution, or broadcast OTA commands to all connected phones.
           </p>
 
           <div style={{ background: 'rgba(0,0,0,0.3)', padding: '1.25rem', borderRadius: 'var(--radius-sm)', marginBottom: '1.5rem' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '1rem' }}>
               <div>
-                <span style={{ color: 'var(--text-dim)', fontSize: '0.85rem' }}>Current Published Version:</span>
-                <div style={{ fontSize: '1.2rem', fontFamily: 'var(--font-mono)', color: 'var(--accent-amber)', fontWeight: '700' }}>
-                  v{firmwareInfo?.version || '1.0.0'}
+                <span style={{ color: 'var(--text-dim)', fontSize: '0.85rem' }}>Current Distributed Version:</span>
+                <div style={{ fontSize: '1.2rem', fontFamily: 'var(--font-mono)', color: 'var(--accent-amber)', fontWeight: '700', display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                  v{firmwareInfo?.version || '1.2.0'}
+                  {firmwareInfo?.isCustomOverride ? (
+                    <span className="badge badge-amber" style={{ fontSize: '0.75rem', padding: '0.2rem 0.5rem' }}>
+                      <Sparkles size={12} /> Custom Override Active
+                    </span>
+                  ) : (
+                    <span className="badge badge-online" style={{ fontSize: '0.75rem', padding: '0.2rem 0.5rem' }}>
+                      Official Release
+                    </span>
+                  )}
                 </div>
               </div>
 
-              {firmwareInfo?.hasBinary && (
-                <a href="/api/firmware/download/latest" download="firmware.bin" className="btn btn-secondary btn-sm">
-                  <Download size={14} /> Download Current Binary (.bin)
-                </a>
-              )}
+              <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center' }}>
+                {firmwareInfo?.isCustomOverride && (
+                  <button onClick={handleResetFirmwareOverride} className="btn btn-secondary btn-sm">
+                    <RotateCcw size={14} /> Revert to Official Release
+                  </button>
+                )}
+
+                {firmwareInfo?.hasBinary && (
+                  <a href="/api/firmware/download/latest" download="firmware.bin" className="btn btn-secondary btn-sm">
+                    <Download size={14} /> Download Binary (.bin)
+                  </a>
+                )}
+              </div>
             </div>
           </div>
 
-          <form onSubmit={handleUploadFirmware} style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
+          <form onSubmit={handleUploadFirmware} style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem', marginBottom: '1.5rem' }}>
             <div className="grid-2">
               <div className="form-group">
-                <label className="form-label">Firmware Version String</label>
+                <label className="form-label">Firmware Version String (e.g. Custom Build)</label>
                 <input
                   type="text"
                   className="form-input"
                   required
                   value={firmwareVersionInput}
                   onChange={(e) => setFirmwareVersionInput(e.target.value)}
-                  placeholder="e.g. 1.1.0"
+                  placeholder="e.g. 1.2.0-custom"
                 />
               </div>
 
@@ -863,9 +1067,20 @@ export const AdminDashboardPage: React.FC = () => {
               </div>
             </div>
 
-            <button type="submit" disabled={!firmwareFile || uploadingFw} className="btn btn-primary btn-lg" style={{ alignSelf: 'flex-start' }}>
-              <Upload size={18} /> {uploadingFw ? 'Uploading Firmware...' : 'Publish & Broadcast OTA Update'}
-            </button>
+            <div style={{ display: 'flex', gap: '1rem', alignItems: 'center', flexWrap: 'wrap' }}>
+              <button type="submit" disabled={!firmwareFile || uploadingFw} className="btn btn-primary btn-lg">
+                <Upload size={18} /> {uploadingFw ? 'Uploading Firmware...' : 'Upload Custom Firmware Override'}
+              </button>
+
+              <button
+                type="button"
+                onClick={handleBroadcastOta}
+                disabled={broadcastingOta}
+                className="btn btn-amber btn-lg"
+              >
+                <Smartphone size={18} /> {broadcastingOta ? 'Broadcasting OTA...' : 'Push OTA to All Online Phones'}
+              </button>
+            </div>
           </form>
         </div>
       )}
@@ -875,16 +1090,93 @@ export const AdminDashboardPage: React.FC = () => {
         <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
           <div className="glass-card highlight-amber" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '1rem' }}>
             <div>
-              <h3 style={{ fontSize: '1.15rem' }}>Compressed System Backups (.tar.gz)</h3>
-              <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem' }}>
-                Bundles SQLite database, custom branding, and voicemail audio files with schema version tracking.
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap' }}>
+                <h3 style={{ fontSize: '1.15rem', margin: 0 }}>Full System Backups & Restoration (.tar.gz)</h3>
+                <a
+                  href="https://github.com/TylerHats/DecaTone/wiki/Backend-and-Docker-Deployment#compressed-backups--disaster-recovery"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  style={{ color: 'var(--accent-amber)', fontSize: '0.8rem', display: 'flex', alignItems: 'center', gap: '0.35rem', textDecoration: 'none' }}
+                >
+                  <HelpCircle size={14} /> Backup & Recovery Guide <ExternalLink size={12} />
+                </a>
+              </div>
+              <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem', marginTop: '0.25rem' }}>
+                Complete zero-loss archive of SQLite database, user settings, admin policies, custom brand assets, and voicemail recordings.
               </p>
             </div>
 
             <button onClick={handleCreateBackup} disabled={creatingBackup} className="btn btn-amber btn-lg">
-              <FileArchive size={18} /> {creatingBackup ? 'Compressing Archive...' : 'Create Backup Archive'}
+              <FileArchive size={18} /> {creatingBackup ? 'Compressing Archive...' : 'Create Backup Archive Now'}
             </button>
           </div>
+
+          {/* Automated Backup Settings Card */}
+          <form onSubmit={handleSaveBackupSettings} className="glass-card">
+            <h4 style={{ fontSize: '1rem', marginBottom: '1rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+              <Clock size={16} color="var(--accent-amber)" /> Automated Backup Schedule & Retention Policy
+            </h4>
+
+            <div className="grid-2" style={{ marginBottom: '1.25rem' }}>
+              <div className="form-group" style={{ display: 'flex', alignItems: 'center', marginTop: '0.5rem' }}>
+                <label style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', cursor: 'pointer' }}>
+                  <input
+                    type="checkbox"
+                    checked={autoBackupEnabled}
+                    onChange={(e) => setAutoBackupEnabled(e.target.checked)}
+                    style={{ width: '18px', height: '18px', accentColor: 'var(--accent-cyan)' }}
+                  />
+                  <div>
+                    <strong style={{ color: '#fff' }}>Enable Scheduled Automated Backups</strong>
+                    <p style={{ color: 'var(--text-dim)', fontSize: '0.8rem', margin: 0 }}>
+                      Automatically archives database, branding, and voicemails in the background.
+                    </p>
+                  </div>
+                </label>
+              </div>
+
+              <div className="form-group">
+                <label className="form-label">Backup Frequency</label>
+                <select
+                  className="form-select"
+                  value={autoBackupInterval}
+                  onChange={(e) => setAutoBackupInterval(e.target.value)}
+                >
+                  <option value="hourly">Hourly</option>
+                  <option value="daily">Daily (Recommended)</option>
+                  <option value="weekly">Weekly</option>
+                </select>
+              </div>
+            </div>
+
+            <div className="grid-2" style={{ marginBottom: '1.25rem' }}>
+              <div className="form-group">
+                <label className="form-label">Scheduled Execution Time</label>
+                <input
+                  type="time"
+                  className="form-input"
+                  value={autoBackupTime}
+                  onChange={(e) => setAutoBackupTime(e.target.value)}
+                />
+              </div>
+
+              <div className="form-group">
+                <label className="form-label">Backup Retention Count (Keep Last N Backups)</label>
+                <input
+                  type="number"
+                  min="1"
+                  max="100"
+                  className="form-input"
+                  value={backupRetentionCount}
+                  onChange={(e) => setBackupRetentionCount(parseInt(e.target.value, 10) || 10)}
+                />
+              </div>
+            </div>
+
+            <button type="submit" disabled={savingBackupSettings} className="btn btn-secondary btn-sm">
+              <CheckCircle2 size={14} /> {savingBackupSettings ? 'Saving...' : 'Save Backup & Retention Policy'}
+            </button>
+          </form>
 
           {/* Backup Archives List */}
           <div className="glass-card">
@@ -930,7 +1222,7 @@ export const AdminDashboardPage: React.FC = () => {
           <div className="glass-card">
             <h4 style={{ fontSize: '1rem', marginBottom: '0.5rem' }}>Restore Backup Archive</h4>
             <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem', marginBottom: '1rem' }}>
-              Upload a previous <code style={{ fontFamily: 'var(--font-mono)' }}>.tar.gz</code> archive. Database migrations will execute automatically.
+              Upload a previous <code style={{ fontFamily: 'var(--font-mono)' }}>.tar.gz</code> archive. 100% of user data, database records, custom brand icons, and voicemail audio will be restored.
             </p>
 
             <form onSubmit={handleRestoreBackup} style={{ display: 'flex', gap: '1rem', alignItems: 'center' }}>
@@ -951,74 +1243,245 @@ export const AdminDashboardPage: React.FC = () => {
 
       {/* TAB 6: SELF-UPDATER */}
       {activeTab === 'updates' && (
-        <div className="glass-card">
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem', flexWrap: 'wrap', gap: '1rem' }}>
-            <div>
-              <h3 style={{ fontSize: '1.15rem' }}>DecaTone System Self-Updater</h3>
-              <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem' }}>
-                Fetch updates and new releases directly from GitHub repository.
-              </p>
-            </div>
-
-            <button onClick={fetchUpdateCheck} disabled={checkingUpdate} className="btn btn-secondary btn-sm">
-              <RefreshCw size={14} /> {checkingUpdate ? 'Checking GitHub...' : 'Check for Updates'}
-            </button>
-          </div>
-
-          <div className="grid-3" style={{ marginBottom: '1.5rem' }}>
-            <div style={{ background: 'rgba(0,0,0,0.3)', padding: '1rem', borderRadius: 'var(--radius-sm)' }}>
-              <span style={{ color: 'var(--text-dim)', fontSize: '0.8rem' }}>Installed Version:</span>
-              <div style={{ fontSize: '1.2rem', fontFamily: 'var(--font-mono)', fontWeight: '700', color: '#fff' }}>
-                v{updateInfo?.currentVersion || '1.0.0'}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
+          <div className="glass-card">
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem', flexWrap: 'wrap', gap: '1rem' }}>
+              <div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap' }}>
+                  <h3 style={{ fontSize: '1.15rem', margin: 0 }}>DecaTone System & Firmware Self-Updater</h3>
+                  <a
+                    href="https://github.com/TylerHats/DecaTone/wiki/Backend-and-Docker-Deployment"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    style={{ color: 'var(--accent-cyan)', fontSize: '0.8rem', display: 'flex', alignItems: 'center', gap: '0.35rem', textDecoration: 'none' }}
+                  >
+                    <HelpCircle size={14} /> Deployment & Update Wiki <ExternalLink size={12} />
+                  </a>
+                </div>
+                <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem', marginTop: '0.25rem' }}>
+                  Fetch system updates and ESP32-S3 firmware releases directly from the GitHub repository.
+                </p>
               </div>
-            </div>
 
-            <div style={{ background: 'rgba(0,0,0,0.3)', padding: '1rem', borderRadius: 'var(--radius-sm)' }}>
-              <span style={{ color: 'var(--text-dim)', fontSize: '0.8rem' }}>Release Channel:</span>
-              <select
-                className="form-select"
-                style={{ marginTop: '0.25rem', padding: '0.35rem 0.5rem' }}
-                value={updateInfo?.channel || 'stable'}
-                onChange={(e) => handleChangeChannel(e.target.value)}
-              >
-                <option value="stable">Stable Channel</option>
-                <option value="beta">Beta Channel (Tags)</option>
-                <option value="alpha">Alpha Channel (Main Commits)</option>
-              </select>
-            </div>
-
-            <div style={{ background: 'rgba(0,0,0,0.3)', padding: '1rem', borderRadius: 'var(--radius-sm)' }}>
-              <span style={{ color: 'var(--text-dim)', fontSize: '0.8rem' }}>Target Version:</span>
-              <div style={{ fontSize: '1.2rem', fontFamily: 'var(--font-mono)', fontWeight: '700', color: 'var(--accent-amber)' }}>
-                {updateInfo?.targetVersion || '---'}
-              </div>
-            </div>
-          </div>
-
-          {updateInfo?.updateAvailable ? (
-            <div style={{ background: 'rgba(14, 165, 233, 0.15)', border: '1px solid rgba(14, 165, 233, 0.3)', padding: '1.25rem', borderRadius: 'var(--radius-sm)', marginBottom: '1rem' }}>
-              <h4 style={{ color: '#38bdf8', marginBottom: '0.5rem' }}>Update Available!</h4>
-              <p style={{ color: 'var(--text-main)', fontSize: '0.9rem', marginBottom: '1rem' }}>
-                {updateInfo?.latestRelease?.name || `Version ${updateInfo?.targetVersion}`} is ready to install.
-              </p>
-              <button onClick={handleApplyUpdate} disabled={applyingUpdate} className="btn btn-primary btn-lg">
-                <RefreshCw size={18} /> {applyingUpdate ? 'Updating DecaTone...' : 'Apply Update & Reboot Container'}
+              <button onClick={fetchUpdateCheck} disabled={checkingUpdate} className="btn btn-secondary btn-sm">
+                <RefreshCw size={14} /> {checkingUpdate ? 'Checking GitHub...' : 'Check for Updates'}
               </button>
             </div>
-          ) : (
-            <div style={{ color: '#34d399', fontSize: '0.9rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-              <CheckCircle2 size={16} /> DecaTone is running the latest available version on the {updateInfo?.channel} channel.
+
+            <div className="grid-3" style={{ marginBottom: '1.5rem' }}>
+              <div style={{ background: 'rgba(0,0,0,0.3)', padding: '1rem', borderRadius: 'var(--radius-sm)' }}>
+                <span style={{ color: 'var(--text-dim)', fontSize: '0.8rem' }}>Installed Server Version:</span>
+                <div style={{ fontSize: '1.2rem', fontFamily: 'var(--font-mono)', fontWeight: '700', color: '#fff' }}>
+                  v{updateInfo?.currentVersion || '1.0.0'}
+                </div>
+              </div>
+
+              <div style={{ background: 'rgba(0,0,0,0.3)', padding: '1rem', borderRadius: 'var(--radius-sm)' }}>
+                <span style={{ color: 'var(--text-dim)', fontSize: '0.8rem' }}>
+                  {updateInfo?.isDocker ? 'ESP32-S3 Firmware Channel:' : 'System Release Channel:'}
+                </span>
+                <select
+                  className="form-select"
+                  style={{ marginTop: '0.25rem', padding: '0.35rem 0.5rem' }}
+                  value={updateInfo?.channel || 'stable'}
+                  onChange={(e) => handleChangeChannel(e.target.value)}
+                >
+                  <option value="stable">Stable Channel</option>
+                  <option value="beta">Beta Channel (Tags)</option>
+                  <option value="alpha">Alpha Channel (Main Commits)</option>
+                </select>
+              </div>
+
+              <div style={{ background: 'rgba(0,0,0,0.3)', padding: '1rem', borderRadius: 'var(--radius-sm)' }}>
+                <span style={{ color: 'var(--text-dim)', fontSize: '0.8rem' }}>Target Version:</span>
+                <div style={{ fontSize: '1.2rem', fontFamily: 'var(--font-mono)', fontWeight: '700', color: 'var(--accent-amber)' }}>
+                  {updateInfo?.targetVersion || '---'}
+                </div>
+              </div>
             </div>
-          )}
+
+            {/* Docker Environment Notice */}
+            {updateInfo?.isDocker ? (
+              <div style={{ background: 'rgba(56, 189, 248, 0.12)', border: '1px solid rgba(56, 189, 248, 0.3)', padding: '1.25rem', borderRadius: 'var(--radius-sm)', marginBottom: '1rem' }}>
+                <h4 style={{ color: '#38bdf8', marginBottom: '0.5rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                  🐳 Docker Environment Detected
+                </h4>
+                <p style={{ color: 'var(--text-main)', fontSize: '0.9rem', marginBottom: '0.75rem' }}>
+                  DecaTone is running inside a Docker container. In-app git modifications are safely disabled to preserve container immutability. The release channel selected above determines which firmware is offered to connected physical phones.
+                </p>
+                <div style={{ background: 'rgba(0,0,0,0.4)', padding: '0.75rem', borderRadius: 'var(--radius-sm)', fontFamily: 'var(--font-mono)', fontSize: '0.85rem', color: '#a5f3fc' }}>
+                  docker pull {updateInfo?.dockerImage || 'ghcr.io/tylerhats/decatone:latest'} && docker compose up -d
+                </div>
+              </div>
+            ) : updateInfo?.updateAvailable ? (
+              <div style={{ background: 'rgba(14, 165, 233, 0.15)', border: '1px solid rgba(14, 165, 233, 0.3)', padding: '1.25rem', borderRadius: 'var(--radius-sm)', marginBottom: '1rem' }}>
+                <h4 style={{ color: '#38bdf8', marginBottom: '0.5rem' }}>Update Available!</h4>
+                <p style={{ color: 'var(--text-main)', fontSize: '0.9rem', marginBottom: '1rem' }}>
+                  {updateInfo?.latestRelease?.name || `Version ${updateInfo?.targetVersion}`} is ready to install.
+                </p>
+                <button onClick={handleApplyUpdate} disabled={applyingUpdate} className="btn btn-primary btn-lg">
+                  <RefreshCw size={18} /> {applyingUpdate ? 'Updating DecaTone...' : 'Apply Update & Reboot Service'}
+                </button>
+              </div>
+            ) : (
+              <div style={{ color: '#34d399', fontSize: '0.9rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                <CheckCircle2 size={16} /> DecaTone is running the latest available version on the {updateInfo?.channel} channel.
+              </div>
+            )}
+          </div>
+
+          {/* Server Auto-Update Settings */}
+          <form onSubmit={handleSaveUpdateSettings} className="glass-card">
+            <h4 style={{ fontSize: '1rem', marginBottom: '1rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+              <Clock size={16} color="var(--accent-cyan)" /> {updateInfo?.isDocker ? 'ESP32-S3 Firmware Auto-Update Schedule' : 'Server Auto-Update Schedule'}
+            </h4>
+
+            <div className="grid-2" style={{ marginBottom: '1.25rem' }}>
+              <div className="form-group" style={{ display: 'flex', alignItems: 'center', marginTop: '0.5rem' }}>
+                <label style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', cursor: 'pointer' }}>
+                  <input
+                    type="checkbox"
+                    checked={serverAutoUpdateEnabled}
+                    onChange={(e) => setServerAutoUpdateEnabled(e.target.checked)}
+                    style={{ width: '18px', height: '18px', accentColor: 'var(--accent-cyan)' }}
+                  />
+                  <div>
+                    <strong style={{ color: '#fff' }}>Enable Scheduled Updates</strong>
+                    <p style={{ color: 'var(--text-dim)', fontSize: '0.8rem', margin: 0 }}>
+                      Periodically checks for and applies releases automatically.
+                    </p>
+                  </div>
+                </label>
+              </div>
+
+              <div className="form-group">
+                <label className="form-label">Check Frequency</label>
+                <select
+                  className="form-select"
+                  value={serverAutoUpdateFrequency}
+                  onChange={(e) => setServerAutoUpdateFrequency(e.target.value)}
+                >
+                  <option value="daily">Daily</option>
+                  <option value="weekly">Weekly</option>
+                </select>
+              </div>
+            </div>
+
+            <div className="grid-2" style={{ marginBottom: '1.25rem' }}>
+              <div className="form-group">
+                <label className="form-label">Update Time Window</label>
+                <input
+                  type="time"
+                  className="form-input"
+                  value={serverAutoUpdateTime}
+                  onChange={(e) => setServerAutoUpdateTime(e.target.value)}
+                />
+              </div>
+
+              <div className="form-group">
+                <label className="form-label">Release Channel</label>
+                <select
+                  className="form-select"
+                  value={serverAutoUpdateChannel}
+                  onChange={(e) => setServerAutoUpdateChannel(e.target.value)}
+                >
+                  <option value="stable">Stable</option>
+                  <option value="beta">Beta</option>
+                  <option value="alpha">Alpha</option>
+                </select>
+              </div>
+            </div>
+
+            <button type="submit" disabled={savingUpdateSettings} className="btn btn-secondary btn-sm">
+              <CheckCircle2 size={14} /> {savingUpdateSettings ? 'Saving...' : 'Save Auto-Update Schedule'}
+            </button>
+          </form>
         </div>
       )}
 
       {/* TAB 7: SETTINGS & WHITELABELING */}
       {activeTab === 'settings' && (
         <form onSubmit={handleSaveSettings} className="glass-card" style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
-          <h3 style={{ fontSize: '1.15rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-            <Sliders size={18} color="var(--accent-cyan)" /> System Settings & Phone Policy
-          </h3>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.75rem' }}>
+            <h3 style={{ fontSize: '1.15rem', display: 'flex', alignItems: 'center', gap: '0.5rem', margin: 0 }}>
+              <Sliders size={18} color="var(--accent-cyan)" /> System Settings, Icons & Branding
+            </h3>
+            <a
+              href="https://github.com/TylerHats/DecaTone/wiki/User-and-Admin-Guide"
+              target="_blank"
+              rel="noopener noreferrer"
+              style={{ color: 'var(--accent-cyan)', fontSize: '0.8rem', display: 'flex', alignItems: 'center', gap: '0.35rem', textDecoration: 'none' }}
+            >
+              <HelpCircle size={14} /> Admin & Policies Guide <ExternalLink size={12} />
+            </a>
+          </div>
+
+          {/* Program Icons & Custom Branding Section */}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
+            <div>
+              <h4 style={{ fontSize: '1.05rem', color: 'var(--accent-cyan)', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                <Globe size={18} /> Program Branding, Favicons & Navbar Icons
+              </h4>
+              <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem', marginTop: '0.25rem' }}>
+                Customize your switchboard's brand name, header logo, browser tab favicon, and top-right program icons.
+              </p>
+            </div>
+
+            <div className="grid-2">
+              <div className="form-group">
+                <label className="form-label">Application Display Name</label>
+                <input
+                  type="text"
+                  className="form-input"
+                  value={settings.app_name || ''}
+                  onChange={(e) => setSettings({ ...settings, app_name: e.target.value })}
+                  placeholder="e.g. DecaTone"
+                />
+              </div>
+
+              <div className="form-group">
+                <label className="form-label">Brand Logo Image (Header / Login)</label>
+                <input
+                  type="file"
+                  accept="image/png,image/jpeg,image/svg+xml"
+                  onChange={(e) => setLogoFile(e.target.files?.[0] || null)}
+                  style={{ color: 'var(--text-muted)' }}
+                />
+              </div>
+            </div>
+
+            <div className="grid-2">
+              <div className="form-group">
+                <label className="form-label">Browser Tab Favicon (.png / .ico)</label>
+                <input
+                  type="file"
+                  accept="image/png,image/x-icon,image/svg+xml"
+                  onChange={(e) => setFaviconFile(e.target.files?.[0] || null)}
+                  style={{ color: 'var(--text-muted)' }}
+                />
+              </div>
+
+              <div className="form-group">
+                <label className="form-label">Top-Right / Navbar Program Icon (.png / .svg)</label>
+                <input
+                  type="file"
+                  accept="image/png,image/jpeg,image/svg+xml"
+                  onChange={(e) => setNavbarIconFile(e.target.files?.[0] || null)}
+                  style={{ color: 'var(--text-muted)' }}
+                />
+              </div>
+            </div>
+
+            <div style={{ display: 'flex', justifyContent: 'flex-start', gap: '1rem', marginTop: '0.25rem' }}>
+              <button
+                type="button"
+                onClick={handleResetBranding}
+                className="btn btn-secondary btn-sm"
+              >
+                Reset Brand Icons to Default
+              </button>
+            </div>
+          </div>
 
           {/* SMTP Outbound Mail Dispatcher Configuration */}
           <div style={{ borderTop: '1px solid var(--border-subtle)', paddingTop: '1.5rem', display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>

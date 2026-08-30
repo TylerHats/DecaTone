@@ -146,11 +146,72 @@ export class ServiceLinesService {
   }
 
   /**
-   * Plays raw PCM audio to a device
+   * 111: Ringback Line Test Service
+   * Prompts user to hang up receiver; after 5 seconds of on-hook, triggers delayed test ring!
+   */
+  private pendingRingbacks = new Map<string, { userId?: number; timeout?: NodeJS.Timeout }>();
+
+  public async startRingbackTestSession(deviceId: string, userId: number | undefined, ws: WebSocket) {
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    
+    // Register device as waiting for hangup
+    this.pendingRingbacks.set(deviceId, { userId });
+
+    const text = 'DecaTone ring back test service. Please hang up your receiver now. Your phone will ring in five seconds.';
+    const speechAudio = TtsAudioService.synthesizeSpeech(text);
+    const postSilence = Buffer.alloc(TtsAudioService.SAMPLE_RATE * 3 * 2);
+    await this.streamAudioBuffer(ws, Buffer.concat([speechAudio, postSilence]));
+  }
+
+  public handleRingbackOnHook(deviceId: string, onTriggerRing: (deviceId: string, userId?: number) => void) {
+    const entry = this.pendingRingbacks.get(deviceId);
+    if (entry) {
+      console.log(`[Service Lines] ☎️ Handset hung up for Ringback Line Test on ${deviceId}. Ring scheduled in 5 seconds.`);
+      if (entry.timeout) clearTimeout(entry.timeout);
+      
+      entry.timeout = setTimeout(() => {
+        console.log(`[Service Lines] 🔔 Executing Ringback Test Ring on ${deviceId}`);
+        onTriggerRing(deviceId, entry.userId);
+        this.pendingRingbacks.delete(deviceId);
+      }, 5000);
+    }
+  }
+
+  public cancelRingbackTest(deviceId: string) {
+    const entry = this.pendingRingbacks.get(deviceId);
+    if (entry) {
+      if (entry.timeout) clearTimeout(entry.timeout);
+      this.pendingRingbacks.delete(deviceId);
+    }
+  }
+
+  /**
+   * 567: Dial-Up Modem Handshake & Data Transmission Nostalgia Line
+   */
+  public async startModemHandshakeSession(deviceId: string, ws: WebSocket) {
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    console.log(`[Service Lines] 📠 Starting Dial-Up Modem Handshake Simulator for ${deviceId}`);
+    const modemAudio = TtsAudioService.generateModemHandshakeTone(9.0);
+    await this.streamAudioBuffer(ws, modemAudio);
+  }
+
+  private activeStreams = new Map<string, NodeJS.Timeout>();
+
+  /**
+   * Plays raw PCM audio to a device (cancellable)
    */
   public async startRawPcmPlaybackSession(deviceId: string, pcmBuffer: Buffer, ws?: WebSocket) {
     if (!ws || ws.readyState !== WebSocket.OPEN) return;
-    await this.streamAudioBuffer(ws, pcmBuffer);
+    this.stopRawPcmPlaybackSession(deviceId);
+    await this.streamAudioBuffer(ws, pcmBuffer, deviceId);
+  }
+
+  public stopRawPcmPlaybackSession(deviceId: string) {
+    const timer = this.activeStreams.get(deviceId);
+    if (timer) {
+      clearInterval(timer);
+      this.activeStreams.delete(deviceId);
+    }
   }
 
   private lookupGeoIp(ip: string): Promise<{ lat: number; lon: number; city: string }> {
@@ -223,7 +284,7 @@ export class ServiceLinesService {
   /**
    * Streams a PCM buffer at real-time 16kHz rate over WebSocket in 512-byte frames (16ms per frame)
    */
-  public streamAudioBuffer(ws: WebSocket, pcmBuffer: Buffer): Promise<void> {
+  public streamAudioBuffer(ws: WebSocket, pcmBuffer: Buffer, deviceId?: string): Promise<void> {
     return new Promise((resolve) => {
       const chunkSize = 512; // 256 16-bit samples = 16ms of audio
       let offset = 0;
@@ -231,6 +292,7 @@ export class ServiceLinesService {
       const interval = setInterval(() => {
         if (ws.readyState !== WebSocket.OPEN || offset >= pcmBuffer.length) {
           clearInterval(interval);
+          if (deviceId) this.activeStreams.delete(deviceId);
           resolve();
           return;
         }
@@ -239,6 +301,10 @@ export class ServiceLinesService {
         ws.send(chunk);
         offset += chunkSize;
       }, 16);
+
+      if (deviceId) {
+        this.activeStreams.set(deviceId, interval);
+      }
     });
   }
 }

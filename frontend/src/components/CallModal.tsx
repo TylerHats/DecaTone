@@ -3,7 +3,7 @@ import { PhoneCall, PhoneOff, PhoneForwarded, Volume2, ShieldCheck, User } from 
 import { usePhone } from '../context/PhoneContext';
 
 export const CallModal: React.FC = () => {
-  const { activeCall, hangup } = usePhone();
+  const { activeCall, incomingCall, hangup, answerIncomingCall } = usePhone();
   const [callDuration, setCallDuration] = useState(0);
 
   useEffect(() => {
@@ -109,13 +109,25 @@ export const CallModal: React.FC = () => {
         </div>
 
         {/* Action Controls */}
-        <div style={{ display: 'flex', justifyContent: 'center', gap: '1rem' }}>
+        <div style={{ display: 'flex', justifyContent: 'center', gap: '1rem', flexWrap: 'wrap' }}>
+          {isRinging && (
+            <button
+              onClick={async () => {
+                await answerIncomingCall();
+              }}
+              className="btn btn-primary btn-lg"
+              style={{ minWidth: '160px', background: '#10b981', borderColor: '#059669', color: '#fff' }}
+            >
+              <PhoneCall size={18} /> Answer in Browser
+            </button>
+          )}
+
           <button
             onClick={hangup}
             className="btn btn-danger btn-lg"
             style={{ minWidth: '160px' }}
           >
-            <PhoneOff size={18} /> End Call / Hang Up
+            <PhoneOff size={18} /> {isRinging ? 'Ignore / Hang Up' : 'End Call'}
           </button>
         </div>
       </div>

@@ -12,6 +12,7 @@ import { runMigrations } from '../db/migrations';
 import { createBackupArchiveInternal, purgeExcessBackups } from '../services/backupScheduler';
 import { phoneSwitchService } from '../services/phoneSwitchService';
 import { EmailService } from '../services/emailService';
+import { homeAssistantMqttService } from '../services/homeAssistantMqttService';
 
 const router = Router();
 router.use(authenticateToken, requireAdmin);
@@ -33,15 +34,39 @@ const logoStorage = multer.diskStorage({
   destination: (req, file, cb) => cb(null, customBrandingDir),
   filename: (req, file, cb) => cb(null, 'logo.png')
 });
-const uploadLogo = multer({ storage: logoStorage });
+const uploadLogo = multer({ storage: logoStorage, limits: { fileSize: 5 * 1024 * 1024 } });
+
+const faviconStorage = multer.diskStorage({
+  destination: (req, file, cb) => cb(null, customBrandingDir),
+  filename: (req, file, cb) => cb(null, 'favicon.png')
+});
+const uploadFavicon = multer({ storage: faviconStorage, limits: { fileSize: 2 * 1024 * 1024 } });
+
+const navbarIconStorage = multer.diskStorage({
+  destination: (req, file, cb) => cb(null, customBrandingDir),
+  filename: (req, file, cb) => cb(null, 'navbar_icon.png')
+});
+const uploadNavbarIcon = multer({ storage: navbarIconStorage, limits: { fileSize: 2 * 1024 * 1024 } });
 
 const firmwareStorage = multer.diskStorage({
   destination: (req, file, cb) => cb(null, firmwareDir),
   filename: (req, file, cb) => cb(null, `firmware_latest.bin`)
 });
-const uploadFirmware = multer({ storage: firmwareStorage });
+const uploadFirmware = multer({ storage: firmwareStorage, limits: { fileSize: 16 * 1024 * 1024 } });
 
 const restoreUpload = multer({ dest: path.join(os.tmpdir(), 'decatone-restore') });
+
+export function isDockerEnvironment(): boolean {
+  if (fs.existsSync('/.dockerenv')) return true;
+  if (process.env.IS_DOCKER === 'true' || process.env.DOCKER_CONTAINER === 'true') return true;
+  try {
+    if (fs.existsSync('/proc/self/cgroup')) {
+      const cgroup = fs.readFileSync('/proc/self/cgroup', 'utf8');
+      if (cgroup.includes('docker') || cgroup.includes('containerd') || cgroup.includes('kubepods')) return true;
+    }
+  } catch (e) {}
+  return false;
+}
 
 function execPromise(command: string, cwd?: string): Promise<{ stdout: string; stderr: string }> {
   return new Promise((resolve, reject) => {
@@ -289,20 +314,38 @@ router.post('/firmware/upload', uploadFirmware.single('firmware'), async (req: A
     }
 
     const { version } = req.body;
-    const fwVersion = version?.trim() || '1.1.0';
+    const fwVersion = version?.trim() || '1.2.0';
 
     await execute('INSERT OR REPLACE INTO system_settings (key, value) VALUES (?, ?)', ['firmware_latest_version', fwVersion]);
     await execute('INSERT OR REPLACE INTO system_settings (key, value) VALUES (?, ?)', ['firmware_binary_url', '/api/firmware/download/latest']);
+    await execute('INSERT OR REPLACE INTO system_settings (key, value) VALUES (?, ?)', ['custom_firmware_override', '1']);
 
     // Broadcast OTA Update notification to all connected ESP32-S3 units
     phoneSwitchService.notifyOtaUpdateAvailable(fwVersion, '/api/firmware/download/latest');
 
     return res.json({
-      message: `Firmware v${fwVersion} uploaded! OTA update notification broadcast to all connected phones.`,
-      version: fwVersion
+      message: `Custom Firmware v${fwVersion} uploaded and activated! Broadcast signal dispatched to connected phones.`,
+      version: fwVersion,
+      isCustomOverride: true
     });
   } catch (err: any) {
     return res.status(500).json({ error: `Firmware upload failed: ${err.message}` });
+  }
+});
+
+router.post('/firmware/reset-override', async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    await execute('DELETE FROM system_settings WHERE key = "custom_firmware_override"');
+    const defaultVersion = '1.2.0';
+    await execute('INSERT OR REPLACE INTO system_settings (key, value) VALUES (?, ?)', ['firmware_latest_version', defaultVersion]);
+
+    return res.json({
+      message: 'Custom firmware override cleared. Firmware distribution reverted to official release binary.',
+      version: defaultVersion,
+      isCustomOverride: false
+    });
+  } catch (err: any) {
+    return res.status(500).json({ error: `Failed to reset firmware override: ${err.message}` });
   }
 });
 
@@ -419,6 +462,48 @@ router.post('/backups/restore', restoreUpload.single('backup_file'), async (req:
   }
 });
 
+// Backup Settings (Automated Backups & Retention)
+router.get('/backups/settings', async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const rows = await query<any>('SELECT key, value FROM system_settings WHERE key IN ("auto_backup_enabled", "auto_backup_interval", "auto_backup_time", "backup_retention_count")');
+    const map: Record<string, string> = {};
+    rows.forEach(r => { map[r.key] = r.value; });
+
+    return res.json({
+      autoBackupEnabled: map['auto_backup_enabled'] === 'true',
+      autoBackupInterval: map['auto_backup_interval'] || 'daily',
+      autoBackupTime: map['auto_backup_time'] || '02:00',
+      backupRetentionCount: parseInt(map['backup_retention_count'] || '10', 10)
+    });
+  } catch (err) {
+    return res.status(500).json({ error: 'Failed to fetch backup settings' });
+  }
+});
+
+router.put('/backups/settings', async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const { autoBackupEnabled, autoBackupInterval, autoBackupTime, backupRetentionCount } = req.body;
+
+    if (autoBackupEnabled !== undefined) {
+      await execute('INSERT OR REPLACE INTO system_settings (key, value) VALUES (?, ?)', ['auto_backup_enabled', autoBackupEnabled ? 'true' : 'false']);
+    }
+    if (autoBackupInterval) {
+      await execute('INSERT OR REPLACE INTO system_settings (key, value) VALUES (?, ?)', ['auto_backup_interval', autoBackupInterval]);
+    }
+    if (autoBackupTime) {
+      await execute('INSERT OR REPLACE INTO system_settings (key, value) VALUES (?, ?)', ['auto_backup_time', autoBackupTime]);
+    }
+    if (backupRetentionCount !== undefined) {
+      await execute('INSERT OR REPLACE INTO system_settings (key, value) VALUES (?, ?)', ['backup_retention_count', String(backupRetentionCount)]);
+      purgeExcessBackups(parseInt(String(backupRetentionCount), 10));
+    }
+
+    return res.json({ message: 'Backup and retention settings updated successfully!' });
+  } catch (err) {
+    return res.status(500).json({ error: 'Failed to update backup settings' });
+  }
+});
+
 // 6. Self-Updater & Release Channels
 router.get('/update/check', async (req: AuthenticatedRequest, res: Response) => {
   try {
@@ -469,16 +554,60 @@ router.get('/update/check', async (req: AuthenticatedRequest, res: Response) => 
 
     const normalize = (v: string) => (v ? v.replace(/^v/i, '').trim().toLowerCase() : '');
     const updateAvailable = normalize(targetVersion) !== '' && normalize(installedVersion) !== normalize(targetVersion);
+    const isDocker = isDockerEnvironment();
 
     return res.json({
       currentVersion: installedVersion,
       targetVersion,
       channel,
       updateAvailable,
+      isDocker,
+      dockerImage: 'ghcr.io/tylerhats/decatone:latest',
       latestRelease: latestReleaseInfo || { tag: targetVersion, name: `DecaTone ${targetVersion}`, notes: 'You are running the latest version.' }
     });
   } catch (err) {
     return res.status(500).json({ error: 'Failed to check for updates' });
+  }
+});
+
+router.get('/update/settings', async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const rows = await query<any>('SELECT key, value FROM system_settings WHERE key IN ("server_auto_update_enabled", "server_auto_update_channel", "server_auto_update_time", "server_auto_update_frequency")');
+    const map: Record<string, string> = {};
+    rows.forEach(r => { map[r.key] = r.value; });
+
+    return res.json({
+      autoUpdateEnabled: map['server_auto_update_enabled'] === 'true',
+      autoUpdateChannel: map['server_auto_update_channel'] || 'stable',
+      autoUpdateTime: map['server_auto_update_time'] || '03:00',
+      autoUpdateFrequency: map['server_auto_update_frequency'] || 'daily',
+      isDocker: isDockerEnvironment()
+    });
+  } catch (err) {
+    return res.status(500).json({ error: 'Failed to fetch update settings' });
+  }
+});
+
+router.put('/update/settings', async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const { autoUpdateEnabled, autoUpdateChannel, autoUpdateTime, autoUpdateFrequency } = req.body;
+    if (autoUpdateEnabled !== undefined) {
+      await execute('INSERT OR REPLACE INTO system_settings (key, value) VALUES (?, ?)', ['server_auto_update_enabled', autoUpdateEnabled ? 'true' : 'false']);
+    }
+    if (autoUpdateChannel) {
+      await execute('INSERT OR REPLACE INTO system_settings (key, value) VALUES (?, ?)', ['server_auto_update_channel', autoUpdateChannel]);
+      await execute('INSERT OR REPLACE INTO system_settings (key, value) VALUES (?, ?)', ['update_channel', autoUpdateChannel]);
+    }
+    if (autoUpdateTime) {
+      await execute('INSERT OR REPLACE INTO system_settings (key, value) VALUES (?, ?)', ['server_auto_update_time', autoUpdateTime]);
+    }
+    if (autoUpdateFrequency) {
+      await execute('INSERT OR REPLACE INTO system_settings (key, value) VALUES (?, ?)', ['server_auto_update_frequency', autoUpdateFrequency]);
+    }
+
+    return res.json({ message: 'Server auto-update settings saved!' });
+  } catch (err) {
+    return res.status(500).json({ error: 'Failed to save update settings' });
   }
 });
 
@@ -490,6 +619,7 @@ router.post('/update/channel', async (req: AuthenticatedRequest, res: Response) 
     }
 
     await execute('INSERT OR REPLACE INTO system_settings (key, value) VALUES (?, ?)', ['update_channel', channel]);
+    await execute('INSERT OR REPLACE INTO system_settings (key, value) VALUES (?, ?)', ['server_auto_update_channel', channel]);
     return res.json({ message: `Update channel set to ${channel}` });
   } catch (err) {
     return res.status(500).json({ error: 'Failed to update channel' });
@@ -498,6 +628,13 @@ router.post('/update/channel', async (req: AuthenticatedRequest, res: Response) 
 
 router.post('/update/apply', async (req: AuthenticatedRequest, res: Response) => {
   try {
+    if (isDockerEnvironment()) {
+      return res.status(400).json({
+        isDocker: true,
+        error: 'DecaTone is running inside a Docker container. In-app git updates are disabled. Please pull the updated container image: docker pull ghcr.io/tylerhats/decatone:latest && docker compose up -d'
+      });
+    }
+
     const repoPath = path.join(__dirname, '../../..');
     const { targetVersion } = req.body;
 
@@ -517,7 +654,7 @@ router.post('/update/apply', async (req: AuthenticatedRequest, res: Response) =>
     }
 
     setTimeout(() => {
-      console.log('[Self-Updater] Restarting container to apply updates...');
+      console.log('[Self-Updater] Restarting service to apply updates...');
       process.exit(0);
     }, 1200);
 
@@ -527,7 +664,7 @@ router.post('/update/apply', async (req: AuthenticatedRequest, res: Response) =>
   }
 });
 
-
+// 7. Branding & Icons Management
 router.post('/branding/logo', uploadLogo.single('logo'), async (req: AuthenticatedRequest, res: Response) => {
   try {
     if (!req.file) {
@@ -543,6 +680,88 @@ router.post('/branding/logo', uploadLogo.single('logo'), async (req: Authenticat
     });
   } catch (err: any) {
     return res.status(500).json({ error: 'Failed to upload branding logo' });
+  }
+});
+
+router.post('/branding/favicon', uploadFavicon.single('favicon'), async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ error: 'No favicon image file provided' });
+    }
+
+    const faviconUrl = `/branding/favicon.png?v=${Date.now()}`;
+    await execute('INSERT OR REPLACE INTO system_settings (key, value) VALUES (?, ?)', ['favicon_url', faviconUrl]);
+
+    return res.json({
+      message: 'Custom browser favicon uploaded successfully!',
+      faviconUrl
+    });
+  } catch (err: any) {
+    return res.status(500).json({ error: 'Failed to upload favicon' });
+  }
+});
+
+router.post('/branding/navbar-icon', uploadNavbarIcon.single('navbar_icon'), async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ error: 'No navbar icon image file provided' });
+    }
+
+    const navbarIconUrl = `/branding/navbar_icon.png?v=${Date.now()}`;
+    await execute('INSERT OR REPLACE INTO system_settings (key, value) VALUES (?, ?)', ['navbar_icon_url', navbarIconUrl]);
+
+    return res.json({
+      message: 'Custom navbar/top-right icon uploaded successfully!',
+      navbarIconUrl
+    });
+  } catch (err: any) {
+    return res.status(500).json({ error: 'Failed to upload navbar icon' });
+  }
+});
+
+router.post('/branding/reset', async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    await execute('DELETE FROM system_settings WHERE key IN ("logo_url", "favicon_url", "navbar_icon_url", "icon_url")');
+    if (fs.existsSync(customBrandingDir)) {
+      const files = fs.readdirSync(customBrandingDir);
+      for (const f of files) {
+        try { fs.unlinkSync(path.join(customBrandingDir, f)); } catch (e) {}
+      }
+    }
+    return res.json({ message: 'All branding assets reset to default!' });
+  } catch (err) {
+    return res.status(500).json({ error: 'Failed to reset branding assets' });
+  }
+});
+
+// Broadcast OTA Update to Connected ESP32 Phones
+router.post('/firmware/ota-broadcast', async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const versionRow = await queryOne<any>('SELECT value FROM system_settings WHERE key = "firmware_latest_version"');
+    const binUrlRow = await queryOne<any>('SELECT value FROM system_settings WHERE key = "firmware_binary_url"');
+
+    const firmwareVersion = versionRow?.value || '1.2.0';
+    const binaryUrl = binUrlRow?.value || '/api/firmware/download/latest';
+
+    const onlineDevices = await query<any>('SELECT device_id FROM phones WHERE is_online = 1');
+    let dispatched = 0;
+
+    for (const d of onlineDevices) {
+      phoneSwitchService.sendToDevice(d.device_id, {
+        type: 'ota_available',
+        version: firmwareVersion,
+        binaryUrl
+      });
+      dispatched++;
+    }
+
+    return res.json({
+      message: `OTA update signal dispatched to ${dispatched} online phone(s)!`,
+      count: dispatched,
+      firmwareVersion
+    });
+  } catch (err: any) {
+    return res.status(500).json({ error: `Failed to broadcast OTA update: ${err.message}` });
   }
 });
 
@@ -613,6 +832,40 @@ router.post('/system/wipe', async (req: AuthenticatedRequest, res: Response) => 
     });
   } catch (err: any) {
     return res.status(500).json({ error: `System wipe failed: ${err.message}` });
+  }
+});
+
+// Home Assistant MQTT Integration Settings
+router.get('/mqtt', async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const settings = await homeAssistantMqttService.getMqttSettings();
+    return res.json({
+      enabled: settings.enabled === 'true',
+      host: settings.host,
+      port: settings.port,
+      user: settings.user,
+      pass: settings.pass ? '••••••••' : '',
+      pin: settings.pin
+    });
+  } catch (err) {
+    return res.status(500).json({ error: 'Failed to fetch MQTT settings' });
+  }
+});
+
+router.put('/mqtt', async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const { enabled, host, port, user, pass, pin } = req.body;
+    await homeAssistantMqttService.updateSettings({
+      enabled: !!enabled,
+      host: host || 'localhost',
+      port: parseInt(port || '1883', 10),
+      user: user || '',
+      pass: pass && pass !== '••••••••' ? pass : undefined,
+      pin: pin || '512'
+    });
+    return res.json({ message: 'Home Assistant MQTT integration settings saved and applied!' });
+  } catch (err) {
+    return res.status(500).json({ error: 'Failed to update MQTT settings' });
   }
 });
 
