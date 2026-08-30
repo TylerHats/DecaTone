@@ -5,6 +5,11 @@ AudioManager Audio;
 
 #define I2S_PORT I2S_NUM_0
 
+// Reference RMS target for -18 dBFS (in 16-bit signed scale: 32768 * 10^(-18/20) ≈ 4125)
+static const float TARGET_RMS_INBOUND = 4125.0f;
+static const float TARGET_RMS_MIC = 4500.0f;
+static const float NOISE_GATE_THRESHOLD = 300.0f;
+
 void AudioManager::begin() {
   initI2S();
   initADC();
@@ -12,7 +17,10 @@ void AudioManager::begin() {
   setMicSensitivity(80);
   setSidetoneLevel(10);
   setAudioProfile("vintage_pots");
-  Serial.println("[Audio] I2S Speaker & ADC Mic Initialized with DSP Audio Engine.");
+  m_inboundNormEnabled = true;
+  m_outboundAgcEnabled = true;
+  m_micDcBaseline = 2048;
+  Serial.println("[Audio] I2S DAC & ADC Mic Initialized with Inbound Normalizer & Outbound AGC.");
 }
 
 void AudioManager::initI2S() {
@@ -64,6 +72,16 @@ void AudioManager::setSidetoneLevel(uint8_t sidetonePercent) {
   Serial.printf("[Audio DSP] Sidetone Level: %d%%\n", m_sidetoneLevel);
 }
 
+void AudioManager::setInboundNormalizationEnabled(bool enabled) {
+  m_inboundNormEnabled = enabled;
+  Serial.printf("[Audio DSP] Inbound Normalization: %s\n", enabled ? "ENABLED" : "DISABLED");
+}
+
+void AudioManager::setOutboundAgcEnabled(bool enabled) {
+  m_outboundAgcEnabled = enabled;
+  Serial.printf("[Audio DSP] Outbound Mic AGC: %s\n", enabled ? "ENABLED" : "DISABLED");
+}
+
 void AudioManager::setAudioProfile(const String& profileName) {
   if (profileName == "modern_hd") {
     m_activeProfile = PROFILE_MODERN_HD;
@@ -77,8 +95,63 @@ void AudioManager::setAudioProfile(const String& profileName) {
   }
 
   // Reset filter state buffers
-  m_hp_x1 = m_hp_x2 = m_hp_y1 = m_hp_y2 = 0;
-  m_lp_x1 = m_lp_x2 = m_lp_y1 = m_lp_y2 = 0;
+  m_hp_x1 = m_hp_y1 = 0;
+  m_lp_x1 = m_lp_y1 = 0;
+}
+
+float AudioManager::processInboundLeveler(float sample) {
+  if (!m_inboundNormEnabled) return sample;
+
+  // Track short-term energy using Exponential Moving Average (EMA)
+  float absVal = fabsf(sample);
+  if (absVal > 200.0f) { // Speech activity region
+    // Attack (fast response on louder input) vs Decay (slow recovery on quiet input)
+    float alpha = (absVal > m_inboundRmsLevel) ? 0.005f : 0.0005f;
+    m_inboundRmsLevel = (1.0f - alpha) * m_inboundRmsLevel + alpha * absVal;
+
+    // Calculate normalization multiplier smoothly bounded between 0.3x and 3.5x
+    float targetGain = TARGET_RMS_INBOUND / (m_inboundRmsLevel + 100.0f);
+    targetGain = constrain(targetGain, 0.3f, 3.5f);
+
+    // Smooth gain transition
+    m_inboundNormGain = 0.995f * m_inboundNormGain + 0.005f * targetGain;
+  }
+
+  float leveled = sample * m_inboundNormGain;
+
+  // Soft-knee peak limiting to prevent digital clipping / ear fatigue
+  if (leveled > 28000.0f) {
+    float over = leveled - 28000.0f;
+    leveled = 28000.0f + (over / (1.0f + over / 4000.0f));
+  } else if (leveled < -28000.0f) {
+    float under = -leveled - 28000.0f;
+    leveled = -28000.0f - (under / (1.0f + under / 4000.0f));
+  }
+
+  return leveled;
+}
+
+int16_t AudioManager::processOutboundAgc(int16_t rawSample) {
+  if (!m_outboundAgcEnabled) return rawSample;
+
+  float sample = (float)rawSample;
+  float absVal = fabsf(sample);
+
+  // Noise gate: suppress background hiss/hum when silent
+  if (absVal < NOISE_GATE_THRESHOLD) {
+    return (int16_t)(sample * 0.15f);
+  }
+
+  // Track microphone voice energy
+  float alpha = (absVal > m_micRmsLevel) ? 0.01f : 0.001f;
+  m_micRmsLevel = (1.0f - alpha) * m_micRmsLevel + alpha * absVal;
+
+  float targetGain = TARGET_RMS_MIC / (m_micRmsLevel + 200.0f);
+  targetGain = constrain(targetGain, 0.5f, 4.0f);
+  m_micAgcGain = 0.99f * m_micAgcGain + 0.01f * targetGain;
+
+  float boosted = sample * m_micAgcGain * m_gainMultiplier;
+  return (int16_t)constrain(boosted, -32768.0f, 32767.0f);
 }
 
 int16_t AudioManager::applyVintageWarmth(int16_t sample, float drive) {
@@ -92,20 +165,18 @@ int16_t AudioManager::applyVintageWarmth(int16_t sample, float drive) {
 
 int16_t AudioManager::processDspSample(int16_t inSample) {
   if (m_activeProfile == PROFILE_MODERN_HD) {
-    return inSample; // Unfiltered wideband audio
+    return inSample; // Linear wideband
   }
 
   float x = (float)inSample;
 
   if (m_activeProfile == PROFILE_VINTAGE_POTS) {
-    // 1. High-pass filter ~300Hz at 16kHz sample rate
-    // y[n] = 0.9449*y[n-1] + 0.9724*(x[n] - x[n-1])
+    // 1. High-pass filter ~300Hz at 16kHz
     float hp_out = 0.9449f * m_hp_y1 + 0.9724f * (x - m_hp_x1);
     m_hp_x1 = x;
     m_hp_y1 = hp_out;
 
-    // 2. Low-pass filter ~3400Hz at 16kHz sample rate
-    // y[n] = 0.435*y[n-1] + 0.565*x[n]
+    // 2. Low-pass filter ~3400Hz at 16kHz
     float lp_out = 0.435f * m_lp_y1 + 0.565f * hp_out;
     m_lp_y1 = lp_out;
 
@@ -128,3 +199,56 @@ int16_t AudioManager::processDspSample(int16_t inSample) {
   return inSample;
 }
 
+void AudioManager::writeSpeakerSamples(const int16_t* samples, size_t count) {
+  if (!samples || count == 0) return;
+
+  int16_t dspBuffer[AUDIO_BUFFER_SAMPLES];
+  size_t processed = 0;
+
+  while (processed < count) {
+    size_t chunk = (count - processed > AUDIO_BUFFER_SAMPLES) ? AUDIO_BUFFER_SAMPLES : (count - processed);
+
+    for (size_t i = 0; i < chunk; i++) {
+      float raw = (float)samples[processed + i];
+
+      // 1. Dynamic Inbound Loudness Normalizer & Limiter
+      float normalized = processInboundLeveler(raw);
+
+      // 2. Vintage Acoustic Profile Filter
+      int16_t filtered = processDspSample((int16_t)constrain(normalized, -32768.0f, 32767.0f));
+
+      // 3. Apply Master Volume Multiplier
+      float finalSample = (float)filtered * m_volumeMultiplier;
+      dspBuffer[i] = (int16_t)constrain(finalSample, -32768.0f, 32767.0f);
+    }
+
+    size_t bytesWritten = 0;
+    i2s_write(I2S_PORT, dspBuffer, chunk * sizeof(int16_t), &bytesWritten, portMAX_DELAY);
+    processed += chunk;
+  }
+}
+
+size_t AudioManager::readMicSamples(int16_t* buffer, size_t maxSamples) {
+  if (!buffer || maxSamples == 0) return 0;
+
+  for (size_t i = 0; i < maxSamples; i++) {
+    // Read 12-bit ADC (0 to 4095)
+    int32_t adcRaw = analogRead(PIN_MIC_ADC);
+
+    // Adaptive DC baseline tracker (slow tracking of average bias)
+    m_micDcBaseline = (m_micDcBaseline * 255 + adcRaw) / 256;
+    int32_t centered = adcRaw - m_micDcBaseline;
+
+    // Convert 12-bit signed (-2048..2047) to 16-bit (-32768..32767)
+    int16_t scaled = (int16_t)constrain(centered * 16, -32768, 32767);
+
+    // Outbound Automatic Gain Control & Noise Gate
+    buffer[i] = processOutboundAgc(scaled);
+  }
+
+  return maxSamples;
+}
+
+void AudioManager::update() {
+  // Real-time audio engine update hook called by FreeRTOS task
+}

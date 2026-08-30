@@ -27,6 +27,7 @@ public:
 
   bool isConnected() const;
   CallState getCallState() const;
+  void setCallState(CallState state);
 
 private:
   WebSocketsClient m_webSocket;
@@ -37,6 +38,10 @@ private:
   uint16_t m_serverPort = 4000;
   bool m_useSsl = false;
   String m_sessionKey;
+
+  // Non-blocking test ring timer
+  uint32_t m_testRingStopTime = 0;
+  bool m_testRingActive = false;
 
   void handleWebSocketEvent(WStype_t type, uint8_t* payload, size_t length);
   void handleJsonCommand(const JsonDocument& doc);

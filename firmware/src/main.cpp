@@ -1,4 +1,6 @@
 #include <Arduino.h>
+#include <esp_wifi.h>
+#include <esp_pm.h>
 #include "config.h"
 #include "provisioning.h"
 #include "rotary_dial.h"
@@ -9,12 +11,35 @@
 
 // FreeRTOS Task Handle for Real-Time Audio Engine
 TaskHandle_t AudioTaskHandle = NULL;
+static bool s_isHighPowerMode = true;
+
+// Helper to switch CPU frequency dynamically for low power consumption
+void setPowerState(bool highPerformance) {
+  if (highPerformance == s_isHighPowerMode) return;
+  s_isHighPowerMode = highPerformance;
+
+  if (highPerformance) {
+    setCpuFrequencyMhz(240);
+    esp_wifi_set_ps(WIFI_PS_NONE);
+    Serial.println("[Power] ⚡ Scaled CPU to 240MHz & Disabled WiFi Sleep (Active Telephony Mode)");
+  } else {
+    setCpuFrequencyMhz(80);
+    esp_wifi_set_ps(WIFI_PS_MIN_MODEM);
+    Serial.println("[Power] 🍃 Scaled CPU to 80MHz & Enabled WiFi Modem Sleep (On-Hook Idle Mode)");
+  }
+}
 
 // Audio processing task running on Core 1 for zero jitter
 void AudioTask(void *pvParameters) {
   for (;;) {
     Audio.update();
-    vTaskDelay(pdMS_TO_TICKS(5));
+
+    // Adjust yield interval based on active call state
+    if (NetworkClient.getCallState() == STATE_IN_CALL) {
+      vTaskDelay(pdMS_TO_TICKS(5));
+    } else {
+      vTaskDelay(pdMS_TO_TICKS(40));
+    }
   }
 }
 
@@ -27,6 +52,9 @@ void onDigitDialed(char digit, float pps, float breakRatio, uint32_t pulseCount)
 // Callback when user lifts or replaces the handset
 void onHookStateChanged(bool isOffHook) {
   Serial.printf("[Main] Hook Switch Changed: %s\n", isOffHook ? "OFF HOOK" : "ON HOOK");
+  if (isOffHook) {
+    setPowerState(true);
+  }
   NetworkClient.sendHookState(isOffHook);
 }
 
@@ -66,6 +94,11 @@ void setup() {
     1  // Run on Core 1
   );
 
+  // Set initial power profile based on hook switch
+  if (!RotaryDial.isOffHook()) {
+    setPowerState(false);
+  }
+
   Serial.println("[Main] DecaTone ESP32-S3 Setup Complete.");
 }
 
@@ -76,6 +109,13 @@ void loop() {
   } else {
     // Process Network WebSocket & signaling
     NetworkClient.update();
+
+    // Check if ringing requires high performance clock
+    if (BellRinger.isRinging() || RotaryDial.isOffHook() || NetworkClient.getCallState() != STATE_IDLE) {
+      if (!s_isHighPowerMode) setPowerState(true);
+    } else {
+      if (s_isHighPowerMode && !OtaUpdater.isUpdating()) setPowerState(false);
+    }
   }
 
   // Process Rotary Dial debounce & pulse decoder

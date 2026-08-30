@@ -93,6 +93,8 @@ void NetworkClientManager::handleWebSocketEvent(WStype_t type, uint8_t* payload,
 
     case WStype_DISCONNECTED:
       m_isConnected = false;
+      m_callState = STATE_IDLE;
+      BellRinger.stopRing();
       Serial.println("[WebSocket] Disconnected from switchboard.");
       break;
 
@@ -106,8 +108,8 @@ void NetworkClientManager::handleWebSocketEvent(WStype_t type, uint8_t* payload,
     }
 
     case WStype_BIN:
-      // Inbound audio stream packet from peer phone -> play through MAX98357A I2S DAC
-      if (m_callState == STATE_IN_CALL && length > 0) {
+      // Inbound audio stream packet from peer phone -> play through MAX98357A I2S DAC with DSP normalizer
+      if (length > 0) {
         Audio.writeSpeakerSamples((const int16_t*)payload, length / sizeof(int16_t));
       }
       break;
@@ -134,8 +136,22 @@ void NetworkClientManager::handleJsonCommand(const JsonDocument& doc) {
     if (doc["bellFrequencyHz"].is<float>()) BellRinger.setRingFrequency(doc["bellFrequencyHz"].as<float>());
     BellRinger.startRing(ringStyle, ringCadence);
     uint32_t durationMs = doc["durationMs"] | 6000;
-    delay(durationMs);
+    m_testRingStopTime = millis() + durationMs;
+    m_testRingActive = true;
+  } else if (strcmp(type, "call_incoming") == 0) {
+    const char* ringStyle = doc["ringStyle"] | "traditional";
+    const char* ringCadence = doc["ringCadence"] | "2000,4000";
+    BellRinger.startRing(ringStyle, ringCadence);
+    m_callState = STATE_RINGING;
+    Serial.println("[Switchboard] 🔔 Incoming call! Starting physical bell ringing.");
+  } else if (strcmp(type, "call_start") == 0 || strcmp(type, "call_answered") == 0) {
     BellRinger.stopRing();
+    m_callState = STATE_IN_CALL;
+    Serial.println("[Switchboard] 📞 Call connected. Active voice streaming session.");
+  } else if (strcmp(type, "call_ended") == 0) {
+    BellRinger.stopRing();
+    m_callState = STATE_IDLE;
+    Serial.println("[Switchboard] 📴 Call ended. Idle state restored.");
   } else if (strcmp(type, "reboot") == 0) {
     Serial.println("[Switchboard] Remote reboot commanded.");
     delay(500);
@@ -180,6 +196,22 @@ void NetworkClientManager::sendHookFlash() {
   Serial.println("[WebSocket] ⚡ Sent Hook Flash (Call Hold / Transfer Request) to switchboard.");
 }
 
+void NetworkClientManager::sendDialDigit(char digit, float pps, float breakRatio, uint32_t pulseCount) {
+  if (!m_isConnected) return;
+  DeviceConfig config = Provisioning.getConfig();
+  JsonDocument doc;
+  doc["type"] = "dial_digit";
+  doc["deviceId"] = config.deviceId;
+  doc["digit"] = String(digit);
+  doc["pps"] = pps;
+  doc["breakRatio"] = breakRatio;
+  doc["pulseCount"] = pulseCount;
+
+  String jsonOut;
+  serializeJson(doc, jsonOut);
+  m_webSocket.sendTXT(jsonOut);
+  Serial.printf("[WebSocket] 🔢 Sent Dialed Digit '%c' to switchboard.\n", digit);
+}
 
 void NetworkClientManager::sendCallAnswer() {
   if (!m_isConnected) return;
@@ -219,8 +251,18 @@ CallState NetworkClientManager::getCallState() const {
   return m_callState;
 }
 
+void NetworkClientManager::setCallState(CallState state) {
+  m_callState = state;
+}
+
 void NetworkClientManager::update() {
   m_webSocket.loop();
+
+  // Non-blocking test ring timer check
+  if (m_testRingActive && millis() >= m_testRingStopTime) {
+    m_testRingActive = false;
+    BellRinger.stopRing();
+  }
 
   // Send periodic heartbeat every 20 seconds
   uint32_t now = millis();

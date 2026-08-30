@@ -1,16 +1,13 @@
-# Backend and Docker Deployment
+# Backend and Docker Deployment Guide
 
-This guide explains how to deploy the DecaTone server using Docker Compose, set up native Let's Encrypt SSL certificates, or configure DecaTone behind a reverse proxy (Nginx, Traefik, Caddy, Cloudflare).
+DecaTone is designed for self-hosted operation using **Docker Compose** or a native **Node.js 20+** environment.
 
 ---
 
-## 1. Quick Start with Docker Compose
+## 1. Quick Start via Docker Compose (Recommended)
 
-### Prerequisites
-- Docker (version >= 20.10)
-- Docker Compose (version >= 2.0)
+Create a `docker-compose.yml` file in your desired deployment directory:
 
-### `docker-compose.yml`
 ```yaml
 version: '3.8'
 
@@ -24,7 +21,7 @@ services:
     environment:
       - PORT=4000
       - NODE_ENV=production
-      - JWT_SECRET=change_this_to_a_secure_random_key_64_bytes
+      - JWT_SECRET=your_super_secret_jwt_key_here_change_me
     volumes:
       - decatone-data:/app/backend/data
       - decatone-uploads:/app/backend/uploads
@@ -34,23 +31,32 @@ volumes:
   decatone-uploads:
 ```
 
-### Launch Container
+### Launching the Service
 ```bash
 docker compose up -d
 ```
-
-Access the initial setup wizard at `http://localhost:4000/setup`.
+Access the web dashboard at `http://<your-server-ip>:4000` to complete the initial Setup Wizard.
 
 ---
 
-## 2. Reverse Proxy & SSL Configuration
+## 2. Reverse Proxy & SSL Setup
 
-DecaTone is designed to seamlessly detect reverse proxy environments and SSL termination automatically via Express `trust proxy` and `X-Forwarded-Proto` headers.
+For secure WebSockets (`wss://`) and browser microphone permissions, DecaTone should be placed behind an SSL reverse proxy.
 
-### Nginx Reverse Proxy Configuration Example
+### A. Nginx Configuration
 ```nginx
 server {
+    listen 80;
     server_name phone.example.com;
+    return 301 https://$host$request_uri;
+}
+
+server {
+    listen 443 ssl http2;
+    server_name phone.example.com;
+
+    ssl_certificate /etc/letsencrypt/live/phone.example.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/phone.example.com/privkey.pem;
 
     location / {
         proxy_pass http://127.0.0.1:4000;
@@ -61,29 +67,29 @@ server {
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $scheme;
-        client_max_body_size 50M;
+        proxy_read_timeout 86400s;
+        proxy_send_timeout 86400s;
     }
+}
+```
+
+### B. Caddy Configuration
+```caddy
+phone.example.com {
+    reverse_proxy localhost:4000
 }
 ```
 
 ---
 
-## 3. Native Let's Encrypt SSL Setup (Without Reverse Proxy)
+## 3. Home Assistant & MQTT Integration
 
-If you are running DecaTone on a bare VPS or server without a reverse proxy, you can generate native HTTPS certificates using `setup-ssl.sh`:
+DecaTone includes native MQTT integration with Home Assistant Auto-Discovery.
 
-```bash
-sudo ./setup-ssl.sh
-```
-
-The script will:
-1. Obtain certificates from Let's Encrypt using `certbot`.
-2. Copy `cert.pem` and `key.pem` into `backend/data/`.
-3. DecaTone will automatically detect the certificates and start in native HTTPS mode on port 4000.
-
----
-
-## 4. Backups & Disaster Recovery
-
-- Backups are stored in `backend/data/backups/`.
-- You can create, download, and restore backups anytime from the **Admin Center &rarr; Backups** panel or schedule automated daily/weekly backups with retention policies.
+1. In the DecaTone web dashboard, go to **Admin Center &rarr; Settings & MQTT**.
+2. Enable MQTT and configure your broker:
+   - **Broker URL**: `mqtt://192.168.1.50:1883`
+   - **Username / Password**: Your MQTT user credentials
+   - **HA Discovery Prefix**: `homeassistant`
+   - **Intercom Security PIN**: `411`
+3. DecaTone will automatically register every phone as a device with binary sensors for on-hook/off-hook state, active ringing state, DND switch, and a Text-to-Speech Intercom announcement service!

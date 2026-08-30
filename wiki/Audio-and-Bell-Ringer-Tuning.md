@@ -1,73 +1,58 @@
-# Audio and Bell Ringer Tuning
+# Audio Normalization, DSP and Bell Ringer Tuning
 
-This guide covers fine-tuning audio levels, microphone gain, and mechanical bell ringer resonance.
-
----
-
-## 1. Bell Ringer Resonance & Cadence
-
-Vintage mechanical telephone bells use an alternating magnetic field to pull a spring-loaded clapper back and forth between two brass gongs.
-
-### 20Hz AC Resonance
-- Traditional central offices generated 20Hz (or 25Hz) AC at ~90V RMS.
-- In DecaTone, our circuit uses an **IRF640N MOSFET** switching a **24V–48V DC boost supply** at exactly **20Hz** (50ms period = 25ms HIGH / 25ms LOW).
-- The **~470nF film capacitor** placed across the coils creates an LC tank with the coil inductance, causing the magnetic polarity across the clapper to alternate smoothly, producing a loud and authentic chime!
-
-### Predefined Cadence Styles
-
-1. **Traditional US Bell**:
-   - `2.0s Ring / 4.0s Silence`
-2. **European Double-Ring (British / European Cadence)**:
-   - `0.4s Ring / 0.2s Silence / 0.4s Ring / 2.0s Silence`
-3. **Short Pulse Burst**:
-   - `0.2s Ring / 0.2s Silence (x3) / 2.5s Silence`
-4. **Rapid / Continuous**:
-   - `1.5s Ring / 1.5s Silence`
-5. **Custom Millisecond Timing**:
-   - Define comma-separated durations (e.g. `1000,500,1000,3000`).
+This guide covers DecaTone's audio processing pipeline, dynamic loudness normalization, vintage acoustic filters, and mechanical bell ringer calibration.
 
 ---
 
-## 2. Real-Time Audio DSP Character Profiles
+## 1. Real-Time Audio Normalization & Mic AGC
 
-DecaTone includes on-device Digital Signal Processing (DSP) executed directly on the **ESP32-S3** before audio is encrypted and transmitted over WebSockets. Users can switch audio profiles on the fly from their web interface:
+Vintage rotary telephones have fixed acoustic cavities and no external volume control knobs. DecaTone solves this using real-time DSP normalization on the ESP32-S3:
 
-### Available Sound Profiles
-1. **Modern HD Voice (`modern_hd`)**:
-   - Transparent 16kHz uncompressed linear PCM with wideband frequency response and wide dynamic range.
-2. **Vintage POTS Telephone (`vintage_pots` - Default)**:
-   - Bandpass filter (300Hz–3400Hz) simulating traditional Plain Old Telephone Service (POTS) copper wire loop limits with subtle harmonic warmth (carbon granule microphone simulation).
-3. **1930s Early Bell System (`early_1930s`)**:
-   - Resonant 400Hz–2500Hz bandpass filter with antique non-linear saturation, recreating the warm, nostalgic sound of early Western Electric desk sets.
+### A. Inbound Dynamic Normalization (Earpiece Side)
+- **Exponential Moving Average (EMA) Energy Tracking**: Measures the perceptual loudness of incoming voice packets from any caller (other rotary phones, browser softphones, or automated TTS service lines).
+- **Target RMS Normalization**: Smoothly scales incoming audio to a reference -18 dBFS telephony baseline.
+- **Soft-Knee Peak Limiter**: Tames sudden loud shouts or coughs to prevent ear discomfort.
+- **Master Volume Scaling**: Multiplies normalized audio by the user's web-configured earpiece volume setting (`0%` to `100%`).
 
----
-
-## 3. Handset Sidetone Feedback
-
-Vintage telephones used physical hybrid induction coils to feed a small fraction (typically 5%–15%) of the user's spoken voice from the carbon microphone directly back into the earpiece receiver. This creates an authentic tactile sensation and prevents users from shouting.
-
-- **Configurable in Web UI**: Drag the **Sidetone Feedback** slider from **0%** (silent) up to **30%** (loud).
-- **Default**: `10%` provides an authentic vintage handset feel.
+### B. Outbound Microphone AGC (Transmitter Side)
+- **Automatic Gain Control**: Real-time gain expansion and compression standardizes voice levels before transmission over WebSockets.
+- **Ambient Noise Gate**: Attenuates background room noise when the speaker is silent.
 
 ---
 
-## 4. Real-Time WebSocket Synchronization
+## 2. Acoustic Vintage Profiles
 
-When you drag any slider (Earpiece Volume, Mic Sensitivity, Sidetone) or select an Audio Profile in the web interface:
-1. The web client immediately sends a PUT request to `/api/phone/settings`.
-2. The DecaTone switchboard pushes an `apply_settings` JSON command over the persistent WebSocket to the ESP32-S3.
-3. The ESP32-S3 updates its live DSP filter pipeline and amplifier multipliers in sub-millisecond real-time with no audio dropouts!
+Under **Phone Settings &rarr; Audio DSP Profile**, you can select between three historical acoustic responses:
+
+1. **Vintage POTS (Default)**:
+   - Bandpass filter: 300Hz high-pass / 3400Hz low-pass.
+   - Non-linear soft-saturation curve modeling the harmonic warmth of carbon granule telephone transmitters.
+2. **1930s Early Bell System**:
+   - Bandpass filter: 450Hz high-pass / 2500Hz low-pass.
+   - Narrowband lo-fi compression characteristic of antique candlestick and early desktop bakelite phones (e.g. Western Electric 202/302).
+3. **Modern HD (Linear Wideband)**:
+   - Full 16kHz uncolored linear audio.
 
 ---
 
-## 5. Audio Gain & Level Optimization
+## 3. Sidetone Feedback
 
-Users can configure audio levels in the web UI under **Hardware & Audio**:
+In authentic landline telephony, a small portion of the speaker's own voice is fed back into their earpiece so they know the phone is working and don't shout. DecaTone allows users to adjust sidetone levels between `0%` and `30%` (default `10%`).
 
-### Earpiece Speaker (MAX98357A I2S DAC)
-- Adjust the volume slider between **0% and 100%**.
-- Recommended volume is **70%–85%** to prevent acoustic distortion on high-efficiency vintage earpiece transducers.
+---
 
-### Handset Microphone (MAX4466 Analog Pre-Amp)
-- Adjust the mic sensitivity slider between **0% and 100%**.
-- Also check the physical potentiometer on the back of the MAX4466 breakout board to set the hardware pre-gain.
+## 4. Mechanical Bell Ringer Tuning & Resonance Sweep
+
+### A. Bell Frequency Tuning
+Different telephone bell mechanisms have distinct mechanical resonant frequencies:
+- **Western Electric C4A / 500 series**: 20.0 Hz.
+- **Automatic Electric (AE) straight-line ringers**: 20.0 Hz – 25.0 Hz.
+- **Frequency-selective party-line ringers**: 16.6 Hz, 25.0 Hz, 30.0 Hz, 33.3 Hz, etc.
+
+You can adjust the ringing frequency in `0.1 Hz` increments under **Phone Settings &rarr; Mechanical Resonance Sweep**, or use the interactive sweep tool to test different frequencies (15Hz–30Hz) in real time to find the maximum volume sweet spot for your physical bells.
+
+### B. Customizable Ring Cadences
+- **Traditional North American**: 2.0s On / 4.0s Off (`2000,4000`).
+- **European Double-Ring**: 0.4s On / 0.2s Off / 0.4s On / 2.0s Off (`400,200,400,2000`).
+- **Pulsed Short**: 0.2s On / 0.2s Off / 0.2s On / 0.2s Off / 0.2s On / 2.5s Off.
+- **Custom**: Define any comma-separated millisecond sequence in the web portal (e.g. `1000,1000,1000,3000`).

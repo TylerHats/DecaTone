@@ -1,72 +1,77 @@
 # Hardware Wiring and Pinouts
 
-This guide covers the teardown and electrical conversion of vintage rotary phones to work with DecaTone.
+This page documents the complete hardware architecture, pinout assignments, and electrical interface circuits for reviving vintage rotary telephones with the **Hosyond ESP32-S3-WROOM-1** development board.
 
 ---
 
-## 1. Bill of Materials (BOM)
+## 1. Complete Pinout Table
 
-| Component | Description | Recommended Source / Part |
-| :--- | :--- | :--- |
-| **Microcontroller** | ESP32-S3 Dual Type-C Board with 8MB PSRAM / 16MB Flash | Hosyond ESP32-S3-WROOM-1 |
-| **Audio DAC / Amp** | I2S Mono 3W Class-D Amplifier | MAX98357A Breakout |
-| **Microphone Amp** | Electret Mic Pre-Amplifier Board | MAX4466 Adjustable Gain Board |
-| **Bell MOSFET** | N-Channel Power MOSFET (200V / 18A) | IRF640N (TO-220) |
-| **Voltage Booster** | Step-Up DC-DC Boost Converter (5V to 24V–48V) | XL6009 or MT3608 Module |
-| **Bell Capacitor** | Metallized Polyester Film Capacitor | ~470nF (0.47µF) 100V–250V |
-| **Protection Diode**| Fast / General Rectifier Diode | 1N4007 or UF4007 |
-| **Pull-down Resistor** | Gate Discharge Resistor | 10kΩ 1/4W Resistor |
-| **Power Supply** | 5V 2.5A–3A Power Adapter | USB-C 5V Supply or Internal 5V Buck |
+| GPIO Pin | Function | Peripheral / Connection | Electrical Characteristics |
+| :--- | :--- | :--- | :--- |
+| **GPIO 1** | ADC1_CH0 | **MAX4466** Electret Microphone Analog Out | 0.0V – 3.3V Analog (Internal DC baseline tracking) |
+| **GPIO 4** | Input Pullup | **Handset Hook Switch** | Grounded (LOW) when handset is lifted; Open (HIGH) on cradle |
+| **GPIO 5** | Input Pullup | **Rotary Dial Pulse Switch** | Normally Closed (LOW); Pulses HIGH/LOW as dial spins back |
+| **GPIO 6** | Input Pullup | **Rotary Dial Off-Normal Shunt** | Grounded (LOW) continuously while dial is off its rest position |
+| **GPIO 7** | Output PWM | **IRF640N MOSFET Gate** | 3.3V Logic PWM driving 15Hz–30Hz AC Bell Ringing |
+| **GPIO 16** | Output | **MAX98357A I2S BCLK** | I2S Bit Clock (16kHz $\times$ 16-bit $\times$ 2 = 512kHz) |
+| **GPIO 17** | Output | **MAX98357A I2S LRCK** | I2S Word Select / Frame Clock (16kHz) |
+| **GPIO 18** | Output | **MAX98357A I2S DOUT** | I2S Serial Audio Data Stream Out |
+| **GPIO 48** | Output | **WS2812 RGB LED** | Built-in status indication LED |
+| **GPIO 0** | Input | **Boot / Setup Button** | Hold 5s on boot to trigger Captive Setup AP |
 
 ---
 
-## 2. GPIO Pinout Table
+## 2. Handset Audio Connections
+
+### A. Earpiece Speaker Output (MAX98357A I2S DAC / Class-D Amp)
+- **VIN**: Connect to 5V (VBUS / External 5V).
+- **GND**: Connect to common GND.
+- **BCLK (Bit Clock)**: Connect to **GPIO 16**.
+- **LRC / WS (Word Select)**: Connect to **GPIO 17**.
+- **DIN (Data In)**: Connect to **GPIO 18**.
+- **GAIN**: Tie to GND (default 9dB gain) or leave floating (12dB gain).
+- **Speaker Out (+ / -)**: Connect to handset earpiece dynamic capsule.
+
+### B. Microphone Input (MAX4466 Electret Pre-Amplifier)
+- **VCC**: Connect to 3.3V.
+- **GND**: Connect to common GND.
+- **OUT**: Connect to **GPIO 1 (ADC1_CH0)**.
+- **Gain Trimmer**: Set the potentiometer on the back of the MAX4466 board to roughly 50%–70% for standard conversational speech.
+
+---
+
+## 3. Physical Mechanical Bell Ringer Circuit
+
+Vintage telephones require high-voltage AC resonance (~40V–90V AC at 20Hz) to swing the internal clapper between the twin brass gongs. We drive this safely using an **IRF640N N-Channel Power MOSFET** paired with an inductive flyback snubber:
 
 ```
-================================================================================
-ESP32-S3 Pin   Direction   Peripheral Connection
-================================================================================
-GPIO 1         INPUT       MAX4466 Analog Mic Output (ADC1_CH0)
-GPIO 4         INPUT       Handset Hook Switch (Active LOW to GND, Pull-up)
-GPIO 5         INPUT       Rotary Dial Pulse Switch (Active LOW to GND, Pull-up)
-GPIO 6         INPUT       Rotary Dial Off-Normal Switch (Active LOW to GND, Pull-up)
-GPIO 7         OUTPUT      IRF640N MOSFET Gate (20Hz PWM for Bell Ringer)
-GPIO 16        OUTPUT      MAX98357A I2S BCLK (Bit Clock)
-GPIO 17        OUTPUT      MAX98357A I2S LRCK (Word Select)
-GPIO 18        OUTPUT      MAX98357A I2S DOUT (Serial Data)
-GPIO 48        OUTPUT      Built-in WS2812 RGB Status LED
-GPIO 0         INPUT       Boot Button (Hold 5s to launch AP Setup)
-5V0 / VIN      POWER       Regulated 5V DC In
-GND            GROUND      Common Ground Rail
-================================================================================
+                  +24V to +48V DC Power Supply (Ringer Rail)
+                                    │
+                                    ├───[ 470nF 250V AC Cap ]───┐
+                                    │                           │
+                               ┌────┴───────────────────────────┴────┐
+                               │     Telephone Ringer Coils          │
+                               │   (Red & Black / Slate leads)       │
+                               └────┬────────────────────────────────┘
+                                    │
+                                    ├───────|<────────┐ (1N4007 Diode)
+                                    │                 │
+                           Drain ┌──┴──┐              │
+     GPIO 7 (PWM 20Hz) ──[100Ω]──┤     │ IRF640N      │
+                                 └──┬──┘ MOSFET       │
+                           Source   │                 │
+                                    ├─────────────────┴─ Common GND
+                                   ===
 ```
+
+- **MOSFET Gate Resistor**: 100$\Omega$ between GPIO 7 and Gate to suppress parasitic high-frequency ringing.
+- **Gate Pull-Down**: 10k$\Omega$ between Gate and GND to keep the MOSFET off during microcontroller boot.
+- **Series Capacitor**: 470nF / 250V non-polarized film capacitor in series with the bell coils to block DC current and generate pure resonant AC swings.
 
 ---
 
-## 3. Step-by-Step Conversion Guide
+## 4. Rotary Dial Switch Contacts
 
-### Step 1: Disassembling the Vintage Phone
-1. Unscrew the bottom chassis screws to remove the plastic/bakelite housing.
-2. Identify the internal wires:
-   - **Handset Cable (4 wires)**: 2 wires for the earpiece speaker, 2 wires for the carbon/electret microphone.
-   - **Hook Switch (2 or 3 leaf contacts)**: Identify the contact pair that closes/opens when the cradle is pressed.
-   - **Rotary Dial (4 wires)**: 2 wires for the pulse contact (pulsing 10 times per second), 2 wires for the shunt/off-normal contact.
-   - **Bell Solenoids (2 coil wires)**: Connected to the physical bells and clapper.
-
-### Step 2: Wiring the Handset
-- Remove the old carbon microphone cartridge and insert the **MAX4466** microphone module into the handset mouthpiece cavity (or wire the handset lines to the MAX4466 OUT and VCC/GND inside the chassis).
-- Connect the handset earpiece wires across **SPK+** and **SPK-** on the **MAX98357A** amplifier.
-
-### Step 3: Wiring the Rotary Dial & Hook Switch
-- Wire one side of the Hook Switch to **GPIO 4**, other side to **GND**.
-- Wire one side of the Dial Pulse Switch to **GPIO 5**, other side to **GND**.
-- Wire one side of the Dial Off-Normal Switch to **GPIO 6**, other side to **GND**.
-
-### Step 4: Building the Bell Ringer Circuit
-1. Adjust your DC-DC boost converter output to **24V–36V DC** using a multimeter.
-2. Wire the positive boosted rail to one side of the bell ringer coil.
-3. Wire the **~470nF film capacitor** in parallel directly across the bell ringer coil terminals.
-4. Wire a **1N4007 flyback diode** (cathode to +24V, anode to MOSFET Drain) to protect against inductive flyback spikes.
-5. Connect the other side of the coil to the **Drain** pin of the **IRF640N** MOSFET.
-6. Connect the **Source** pin of the MOSFET to **GND**.
-7. Connect **GPIO 7** from the ESP32-S3 to the **Gate** pin through a 100Ω series resistor, with a **10kΩ pull-down resistor** from Gate to GND.
+Vintage dials (such as the Western Electric No. 7 / No. 9 or AE type 24) have two contact sets:
+1. **Pulse Switch (GPIO 5)**: Opens and closes 1 to 10 times as the rotary wheel springs back to rest. Connected to GPIO 5 with internal pullup (`INPUT_PULLUP`).
+2. **Off-Normal / Shunt Switch (GPIO 6)**: Closes as soon as the finger wheel is pulled from its rest stop, and re-opens only after the dial returns home. Connected to GPIO 6 with internal pullup (`INPUT_PULLUP`).

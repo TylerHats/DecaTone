@@ -47,5 +47,4 @@
 
 // NVS Storage Namespace
 #define NVS_NAMESPACE           "decatone"
-#define FIRMWARE_VERSION        "1.1.0"
-
+#define FIRMWARE_VERSION        "1.0.0"

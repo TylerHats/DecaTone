@@ -405,17 +405,39 @@ This system is self-hosted and **never sells or shares your personal information
       await execute(`ALTER TABLE users ADD COLUMN dnd_override_period TEXT`);
     } catch (e) {}
 
-    await execute('INSERT INTO schema_migrations (version) VALUES (7)');
-    console.log('Migration 7 applied successfully.');
+    await execute("INSERT INTO schema_migrations (version) VALUES (7)");
+    console.log("Migration 7 applied successfully.");
   }
 
   if (currentVersion < 8) {
-    console.log('Running Migration 8: Adding DND Repeated Call Emergency Breakthrough...');
+    console.log("Running Migration 8: Adding DND Repeated Call Emergency Breakthrough...");
     try {
       await execute(`ALTER TABLE users ADD COLUMN dnd_repeated_call_breakthrough INTEGER DEFAULT 1`);
     } catch (e) {}
 
-    await execute('INSERT INTO schema_migrations (version) VALUES (8)');
-    console.log('Migration 8 applied successfully.');
+    await execute("INSERT INTO schema_migrations (version) VALUES (8)");
+    console.log("Migration 8 applied successfully.");
+  }
+
+  if (currentVersion < 9) {
+    console.log("Running Migration 9: Adding Database Performance & Concurrency Indexes...");
+    try {
+      await execute(`CREATE INDEX IF NOT EXISTS idx_calls_caller ON calls(caller_user_id, started_at)`);
+    } catch (e) {}
+    try {
+      await execute(`CREATE INDEX IF NOT EXISTS idx_calls_callee ON calls(callee_user_id, started_at)`);
+    } catch (e) {}
+    try {
+      await execute(`CREATE INDEX IF NOT EXISTS idx_voicemails_user ON voicemails(user_id, is_read)`);
+    } catch (e) {}
+    try {
+      await execute(`CREATE INDEX IF NOT EXISTS idx_friends_friend ON friends(friend_id)`);
+    } catch (e) {}
+    try {
+      await execute(`CREATE INDEX IF NOT EXISTS idx_speed_dials_user ON speed_dials(user_id)`);
+    } catch (e) {}
+
+    await execute("INSERT INTO schema_migrations (version) VALUES (9)");
+    console.log("Migration 9 applied successfully.");
   }
 }
