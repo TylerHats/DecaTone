@@ -2,7 +2,7 @@ version: '3.8'
 
 services:
   decatone:
-    image: ghcr.io/tylerhats/decatone:latest
+    image: tylerhats/decatone:latest
     container_name: decatone-app
     restart: unless-stopped
     ports:
