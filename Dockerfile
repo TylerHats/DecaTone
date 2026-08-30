@@ -3,26 +3,29 @@ FROM node:20-alpine AS builder
 
 WORKDIR /app
 
-# Install build dependencies for native sqlite3
-RUN apk add --no-cache python3 make g++
+# Upgrade base packages and install compilation tools for native SQLite
+RUN apk upgrade --no-cache && apk add --no-cache python3 make g++
 
 # Copy package descriptors
 COPY package*.json ./
 COPY backend/package*.json ./backend/
 COPY frontend/package*.json ./frontend/
 
-# Install dependencies
+# Install all dependencies and build TypeScript / Vite bundles
 RUN npm run setup
 
-# Copy source files
+# Copy source trees
 COPY backend/ ./backend/
 COPY frontend/ ./frontend/
 COPY assets/ ./assets/
 
-# Build frontend and backend
+# Build production artifacts
 RUN npm run build
 
-# Stage 2: Runtime image
+# Prune devDependencies to keep only production packages for runtime
+RUN cd backend && npm prune --production --no-audit --no-fund
+
+# Stage 2: Minimal, Hardened Runtime Image
 FROM node:20-alpine AS runner
 
 WORKDIR /app
@@ -31,22 +34,18 @@ ENV PORT=4000
 ENV DATA_DIR=/app/backend/data
 ENV UPLOADS_DIR=/app/backend/uploads
 
-# Install runtime utilities & build tools for sqlite3
-RUN apk add --no-cache git tar curl python3 make g++ && npm install -g typescript vite
+# Upgrade base runtime packages to latest security releases (OpenSSL, Busybox, etc.)
+RUN apk upgrade --no-cache
 
-COPY package*.json tsconfig*.json ./
+# Copy package descriptors and static assets
+COPY package*.json ./
 COPY backend/package*.json ./backend/
-COPY frontend/package*.json ./frontend/
-
-# Copy source trees (excluding node_modules via .dockerignore)
-COPY backend/ ./backend/
-COPY frontend/ ./frontend/
 COPY assets/ ./assets/
 
-# Install dependencies inside container environment
-RUN cd backend && npm install --no-audit --no-fund && cd ../frontend && npm install --no-audit --no-fund
+# Copy production node_modules from builder
+COPY --from=builder /app/backend/node_modules ./backend/node_modules
 
-# Copy compiled dist files
+# Copy compiled production dist files
 COPY --from=builder /app/backend/dist ./backend/dist
 COPY --from=builder /app/frontend/dist ./frontend/dist
 
@@ -55,4 +54,4 @@ RUN mkdir -p /app/backend/data /app/backend/uploads /app/backend/firmware /app/b
 
 EXPOSE 4000
 
-CMD ["sh", "-c", "cd backend && node dist/server.js"]
+CMD ["node", "backend/dist/server.js"]

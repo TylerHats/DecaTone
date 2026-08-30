@@ -3,7 +3,7 @@
 <div align="center">
   <img src="assets/logo.png" alt="DecaTone Logo" width="180" style="border-radius: 20px; box-shadow: 0 0 25px rgba(14, 165, 233, 0.4);" />
   
-  <h3>Vintage Rotary Telephone VoIP Switch & IoT Control System (v1.2.0)</h3>
+  <h3>Vintage Rotary Telephone VoIP Switch & IoT Control System (v1.2.1)</h3>
 
   [![License: GPL-3.0](https://img.shields.io/badge/License-GPL--3.0-blue.svg)](LICENSE)
   [![Docker Image](https://img.shields.io/badge/Docker-tylerhats%2Fdecatone-blue?logo=docker)](https://hub.docker.com/repository/docker/tylerhats/decatone/general)
