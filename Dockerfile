@@ -1,5 +1,5 @@
 # Stage 1: Build Frontend & Backend
-FROM node:20-alpine AS builder
+FROM node:22-alpine AS builder
 
 WORKDIR /app
 
@@ -26,7 +26,7 @@ RUN npm run build
 RUN cd backend && npm prune --production --no-audit --no-fund
 
 # Stage 2: Minimal, Hardened Runtime Image
-FROM node:20-alpine AS runner
+FROM node:22-alpine AS runner
 
 WORKDIR /app
 ENV NODE_ENV=production
@@ -34,8 +34,10 @@ ENV PORT=4000
 ENV DATA_DIR=/app/backend/data
 ENV UPLOADS_DIR=/app/backend/uploads
 
-# Upgrade base runtime packages to latest security releases (OpenSSL, Busybox, etc.)
-RUN apk upgrade --no-cache
+# Upgrade base runtime packages to latest security releases (OpenSSL 3.5.8, Busybox 1.37.0-r31, etc.)
+# Remove global npm/npx cli to eliminate bundled dev vulnerabilities (tar 6.2.1, sigstore, pacote, minimatch, etc.)
+RUN apk upgrade --no-cache && \
+    rm -rf /usr/local/lib/node_modules/npm /usr/local/bin/npm /usr/local/bin/npx /root/.npm /root/.node-gyp
 
 # Copy package descriptors and static assets
 COPY package*.json ./
