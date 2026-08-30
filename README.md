@@ -10,7 +10,6 @@
   [![ESP32-S3](https://img.shields.io/badge/Hardware-ESP32--S3-red?logo=espressif)](https://www.espressif.com/)
   [![Node.js](https://img.shields.io/badge/Backend-Node.js%2020%20%7C%20TypeScript-green?logo=node.js)](https://nodejs.org/)
   [![React](https://img.shields.io/badge/Frontend-React%2018%20%7C%20Vite-cyan?logo=react)](https://reactjs.org/)
-  [![Version](https://img.shields.io/badge/Release-v1.0.0-emerald.svg)](https://github.com/TylerHats/DecaTone/releases)
 </div>
 
 ---

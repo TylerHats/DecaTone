@@ -109,14 +109,6 @@ const AppContent: React.FC = () => {
             }
           />
 
-          <Route
-            path="/voicemail"
-            element={
-              <ProtectedRoute>
-                <VoicemailPage />
-              </ProtectedRoute>
-            }
-          />
 
           <Route
             path="/admin"

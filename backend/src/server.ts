@@ -70,8 +70,6 @@ app.use('/branding', (req, res, next) => {
   next();
 });
 
-// Serve Project Assets
-app.use('/assets', express.static(defaultAssetsDir));
 
 // Public Branding Configuration Endpoint
 app.get('/api/branding/public', async (req, res) => {

@@ -131,18 +131,6 @@ router.delete('/:id', async (req: AuthenticatedRequest, res: Response) => {
   }
 });
 
-// Get Greeting
-router.get('/greeting', async (req: AuthenticatedRequest, res: Response) => {
-  try {
-    const greeting = await queryOne<any>('SELECT * FROM voicemail_greetings WHERE user_id = ?', [req.user!.id]);
-    return res.json({
-      hasCustomGreeting: !!greeting,
-      audioUrl: greeting?.audio_url || '/assets/sounds/default_greeting.wav'
-    });
-  } catch (err) {
-    return res.status(500).json({ error: 'Failed to fetch voicemail greeting' });
-  }
-});
 
 // Upload Custom Greeting
 router.post('/greeting/upload', upload.single('audio'), async (req: AuthenticatedRequest, res: Response) => {

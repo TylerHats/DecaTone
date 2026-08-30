@@ -203,25 +203,23 @@ export const AdminDashboardPage: React.FC = () => {
     try {
       const res = await fetch(`/api/admin/users/${selectedUserForNumber.id}/phone-number`, {
         method: 'PUT',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
         body: JSON.stringify({ phoneNumber: newNumberInput, areaCode: newAreaCodeInput })
       });
       const data = await res.json();
       if (res.ok) {
-        setToast({ type: 'success', text: 'User extension updated' });
+        setToast({ type: "success", text: "User extension updated" });
         setSelectedUserForNumber(null);
         fetchUsers();
       } else {
-        setToast({ type: 'error', text: data.error });
+        setToast({ type: "error", text: data.error });
       }
     } catch (e) {}
   };
 
   const handleDeleteUser = async (userId: number) => {
-    if (!window.confirm('Permanently delete this user and their call history?')) return;
     try {
       const res = await fetch(`/api/admin/users/${userId}`, {
-        method: 'DELETE',
+        method: "DELETE",
         headers: { Authorization: `Bearer ${token}` }
       });
       if (res.ok) {
@@ -235,34 +233,36 @@ export const AdminDashboardPage: React.FC = () => {
   const handleFleetTestRing = async (deviceId: string) => {
     try {
       const res = await fetch(`/api/admin/fleet/${deviceId}/test-ring`, {
-        method: 'POST',
+        method: "POST",
         headers: { Authorization: `Bearer ${token}` }
       });
-      if (res.ok) setToast({ type: 'success', text: `Test ring signal dispatched to ${deviceId}` });
-      else setToast({ type: 'error', text: 'Device offline' });
+      if (res.ok) setToast({ type: "success", text: `Test ring signal dispatched to ${deviceId}` });
+      else setToast({ type: "error", text: "Device offline" });
     } catch (e) {}
   };
 
   const handleFleetReboot = async (deviceId: string) => {
     try {
       const res = await fetch(`/api/admin/fleet/${deviceId}/reboot`, {
-        method: 'POST',
+        method: "POST",
         headers: { Authorization: `Bearer ${token}` }
       });
-      if (res.ok) setToast({ type: 'success', text: `Reboot command sent to ${deviceId}` });
-      else setToast({ type: 'error', text: 'Device offline' });
+      if (res.ok) setToast({ type: "success", text: `Reboot command sent to ${deviceId}` });
+      else setToast({ type: "error", text: "Device offline" });
     } catch (e) {}
   };
 
   const handleFleetUnpair = async (deviceId: string) => {
-    if (!window.confirm(`Unpair ${deviceId} from its assigned user?`)) return;
     try {
-      await fetch(`/api/admin/fleet/${deviceId}/unpair`, {
-        method: 'POST',
+      const res = await fetch(`/api/admin/fleet/${deviceId}/unpair`, {
+        method: "POST",
         headers: { Authorization: `Bearer ${token}` }
       });
-      fetchFleet();
-      fetchUsers();
+      if (res.ok) {
+        setToast({ type: "success", text: `Device ${deviceId} unpaired successfully` });
+        fetchFleet();
+        fetchUsers();
+      }
     } catch (e) {}
   };
 
@@ -273,22 +273,22 @@ export const AdminDashboardPage: React.FC = () => {
 
     setUploadingFw(true);
     const formData = new FormData();
-    formData.append('firmware', firmwareFile);
-    formData.append('version', firmwareVersionInput);
+    formData.append("firmware", firmwareFile);
+    formData.append("version", firmwareVersionInput);
 
     try {
-      const res = await fetch('/api/admin/firmware/upload', {
-        method: 'POST',
+      const res = await fetch("/api/admin/firmware/upload", {
+        method: "POST",
         headers: { Authorization: `Bearer ${token}` },
         body: formData
       });
       const data = await res.json();
       if (res.ok) {
-        setToast({ type: 'success', text: data.message });
+        setToast({ type: "success", text: data.message });
         setFirmwareFile(null);
         fetchFirmwareInfo();
       } else {
-        setToast({ type: 'error', text: data.error });
+        setToast({ type: "error", text: data.error });
       }
     } catch (e) {}
     setUploadingFw(false);
@@ -298,12 +298,12 @@ export const AdminDashboardPage: React.FC = () => {
   const handleCreateBackup = async () => {
     setCreatingBackup(true);
     try {
-      const res = await fetch('/api/admin/backups/create', {
-        method: 'POST',
+      const res = await fetch("/api/admin/backups/create", {
+        method: "POST",
         headers: { Authorization: `Bearer ${token}` }
       });
       if (res.ok) {
-        setToast({ type: 'success', text: 'Compressed backup archive created!' });
+        setToast({ type: "success", text: "Compressed backup archive created!" });
         fetchBackups();
         fetchMetrics();
       }
@@ -313,27 +313,27 @@ export const AdminDashboardPage: React.FC = () => {
 
   const handleRestoreBackup = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!restoreFile && !window.confirm('Proceed with backup restoration? Current database will be updated.')) return;
+    if (!restoreFile && !window.confirm("Proceed with backup restoration? Current database will be updated.")) return;
 
     setRestoring(true);
     const formData = new FormData();
-    if (restoreFile) formData.append('backup_file', restoreFile);
+    if (restoreFile) formData.append("backup_file", restoreFile);
 
     try {
-      const res = await fetch('/api/admin/backups/restore', {
-        method: 'POST',
+      const res = await fetch("/api/admin/backups/restore", {
+        method: "POST",
         headers: { Authorization: `Bearer ${token}` },
         body: formData
       });
       const data = await res.json();
       if (res.ok) {
-        setToast({ type: 'success', text: data.message });
+        setToast({ type: "success", text: data.message });
         setRestoreFile(null);
         fetchMetrics();
         fetchUsers();
         fetchFleet();
       } else {
-        setToast({ type: 'error', text: data.error });
+        setToast({ type: "error", text: data.error });
       }
     } catch (e) {}
     setRestoring(false);

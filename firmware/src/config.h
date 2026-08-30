@@ -46,5 +46,3 @@
 #define HOOK_FLASH_MAX_MS       500     // Maximum duration before treated as on-hook hangup
 
 // NVS Storage Namespace
-#define NVS_NAMESPACE           "decatone"
-#define FIRMWARE_VERSION        "1.0.0"

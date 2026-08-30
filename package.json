@@ -1,6 +1,6 @@
 {
   "name": "decatone",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "An open-source custom telephone switch system targeting vintage rotary hardware paired with ESP32-S3 IoT control and a modern web interface.",
   "private": true,
   "scripts": {
