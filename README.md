@@ -4,12 +4,6 @@
   <img src="assets/logo.png" alt="DecaTone Logo" width="180" style="border-radius: 20px; box-shadow: 0 0 25px rgba(14, 165, 233, 0.4);" />
   
   <h3>Vintage Rotary Telephone VoIP Switch & IoT Control System (v1.2.2)</h3>
-
-  [![License: GPL-3.0](https://img.shields.io/badge/License-GPL--3.0-blue.svg)](LICENSE)
-  [![Docker Image](https://img.shields.io/badge/Docker-tylerhats%2Fdecatone-blue?logo=docker)](https://hub.docker.com/repository/docker/tylerhats/decatone/general)
-  [![ESP32-S3](https://img.shields.io/badge/Hardware-ESP32--S3-red?logo=espressif)](https://www.espressif.com/)
-  [![Node.js](https://img.shields.io/badge/Backend-Node.js%2020%20%7C%20TypeScript-green?logo=node.js)](https://nodejs.org/)
-  [![React](https://img.shields.io/badge/Frontend-React%2018%20%7C%20Vite-cyan?logo=react)](https://reactjs.org/)
 </div>
 
 ---
