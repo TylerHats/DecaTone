@@ -116,7 +116,7 @@ flowchart TB
 | **GPIO 48** | Output | **Built-in WS2812 RGB Status LED** |
 | **GPIO 0** | Input | **Boot Button** (Hold 5s on boot for Setup AP) |
 
-👉 **[View Detailed Electrical Schematics & Circuit Diagrams](wiki/Hardware-Wiring-and-Pinouts.md)**
+👉 **[View Detailed Electrical Schematics & Circuit Diagrams](https://github.com/TylerHats/DecaTone/wiki/Hardware-Wiring-and-Pinouts)**
 
 ---
 
