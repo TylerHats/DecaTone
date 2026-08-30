@@ -17,7 +17,7 @@ export const Footer: React.FC = () => {
     >
       <div style={{ maxWidth: '1280px', margin: '0 auto', padding: '0 1.5rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.75rem' }}>
         <div>
-          <span>{appName} &copy; {new Date().getFullYear()} &mdash; Open-Source Rotary Phone VoIP Switch</span>
+          <span>{appName} &mdash; Open-Source Rotary Phone VoIP Switch &bull; GNU GPL v3.0</span>
         </div>
         <div style={{ display: 'flex', gap: '1.25rem' }}>
           <a href="/terms" style={{ color: 'var(--text-muted)' }}>Terms & 911 Notice</a>
