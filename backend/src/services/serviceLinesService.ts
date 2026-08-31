@@ -16,7 +16,7 @@ export class ServiceLinesService {
   /**
    * 119 / 099: Start Audio Loopback & Sidetone Echo Test (350ms delay)
    */
-  public startLoopbackSession(deviceId: string, ws: WebSocket) {
+  public async startLoopbackSession(deviceId: string, ws: WebSocket) {
     this.endLoopbackSession(deviceId);
 
     const session: LoopbackSession = {
@@ -26,7 +26,7 @@ export class ServiceLinesService {
     };
 
     // Play intro prompt
-    const introAudio = TtsAudioService.synthesizeSpeech('DecaTone loopback test active. Speak into the handset to test audio.');
+    const introAudio = await TtsAudioService.synthesizeSpeech('DecaTone loopback test active. Speak into the handset to test audio.');
     this.streamAudioBuffer(ws, introAudio);
 
     // Process queued delay buffer every 20ms
@@ -97,7 +97,7 @@ export class ServiceLinesService {
     const minStr = minutes < 10 ? `oh ${minutes}` : `${minutes}`;
     const text = `DecaTone time service. Today is ${dayName}, ${monthName} ${dateNum}. At the tone, the time will be ${hours}:${minStr} ${ampm}, and ${seconds} seconds.`;
 
-    const speechAudio = TtsAudioService.synthesizeSpeech(text);
+    const speechAudio = await TtsAudioService.synthesizeSpeech(text);
     const pipTone = TtsAudioService.generateSineTone(1000, 600, 0.7); // 1000Hz NIST-style pip tone
     const postSilence = Buffer.alloc(TtsAudioService.SAMPLE_RATE * 1.5 * 2);
 
@@ -134,13 +134,13 @@ export class ServiceLinesService {
       const condition = this.wmoCodeToDescription(weather.weather_code);
 
       const text = `DecaTone Weather Service. Current conditions for ${city}: ${condition}, ${tempF} degrees Fahrenheit, humidity ${humidity} percent, with winds at ${windMph} miles per hour.`;
-      const speechAudio = TtsAudioService.synthesizeSpeech(text);
+      const speechAudio = await TtsAudioService.synthesizeSpeech(text);
       const postSilence = Buffer.alloc(TtsAudioService.SAMPLE_RATE * 1.5 * 2);
 
       await this.streamAudioBuffer(ws, Buffer.concat([speechAudio, postSilence]));
     } catch (err) {
       console.error('[Service Lines] Weather fetch failed:', err);
-      const fallbackAudio = TtsAudioService.synthesizeSpeech('DecaTone weather service. Unable to retrieve current local forecast. Please try again later.');
+      const fallbackAudio = await TtsAudioService.synthesizeSpeech('DecaTone weather service. Unable to retrieve current local forecast. Please try again later.');
       await this.streamAudioBuffer(ws, fallbackAudio);
     }
   }
@@ -158,7 +158,7 @@ export class ServiceLinesService {
     this.pendingRingbacks.set(deviceId, { userId });
 
     const text = 'DecaTone ring back test service. Please hang up your receiver now. Your phone will ring in five seconds.';
-    const speechAudio = TtsAudioService.synthesizeSpeech(text);
+    const speechAudio = await TtsAudioService.synthesizeSpeech(text);
     const postSilence = Buffer.alloc(TtsAudioService.SAMPLE_RATE * 3 * 2);
     await this.streamAudioBuffer(ws, Buffer.concat([speechAudio, postSilence]));
   }

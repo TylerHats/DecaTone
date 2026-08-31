@@ -159,7 +159,7 @@ export class HomeAssistantMqttService {
       // Play TTS speech direct to earpiece
       const client = phoneSwitchService.getPhoneClient(deviceId);
       if (client?.ws) {
-        const pcm = TtsAudioService.synthesizeSpeech(value);
+        const pcm = await TtsAudioService.synthesizeSpeech(value);
         serviceLinesService.startRawPcmPlaybackSession(deviceId, pcm, client.ws);
       }
     }

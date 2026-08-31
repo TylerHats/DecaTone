@@ -35,8 +35,10 @@ ENV DATA_DIR=/app/backend/data
 ENV UPLOADS_DIR=/app/backend/uploads
 
 # Upgrade base runtime packages to latest security releases (OpenSSL 3.5.8, Busybox 1.37.0-r31, etc.)
+# Install ffmpeg for crystal-clear TTS audio decoding
 # Remove global npm/npx cli to eliminate bundled dev vulnerabilities (tar 6.2.1, sigstore, pacote, minimatch, etc.)
 RUN apk upgrade --no-cache && \
+    apk add --no-cache ffmpeg && \
     rm -rf /usr/local/lib/node_modules/npm /usr/local/bin/npm /usr/local/bin/npx /root/.npm /root/.node-gyp
 
 # Copy package descriptors and static assets

@@ -762,7 +762,7 @@ export class PhoneSwitchService {
           const overridePeriod = newDnd === 0 ? 'disabled' : null;
           await execute('UPDATE users SET dnd_manual_state = ?, dnd_override_period = ? WHERE id = ?', [newDnd, overridePeriod, client.userId]);
 
-          const speech = TtsAudioService.synthesizeSpeech(newDnd === 1 ? 'Do not disturb is now enabled' : 'Do not disturb is now disabled');
+          const speech = await TtsAudioService.synthesizeSpeech(newDnd === 1 ? 'Do not disturb is now enabled' : 'Do not disturb is now disabled');
           if (client.ws) serviceLinesService.startRawPcmPlaybackSession(deviceId, speech, client.ws);
           console.log(`[Switch] DND state for user ${client.userId} toggled to ${newDnd === 1 ? 'ENABLED' : 'DISABLED'}`);
         }
@@ -776,7 +776,7 @@ export class PhoneSwitchService {
           this.clearDialBuffer(deviceId);
           const user = await queryOne<any>('SELECT * FROM users WHERE id = ?', [client.userId]);
           const isActive = this.isDndActiveForUser(user);
-          const speech = TtsAudioService.synthesizeSpeech(isActive ? 'Do not disturb is currently active' : 'Do not disturb is currently off');
+          const speech = await TtsAudioService.synthesizeSpeech(isActive ? 'Do not disturb is currently active' : 'Do not disturb is currently off');
           if (client.ws) serviceLinesService.startRawPcmPlaybackSession(deviceId, speech, client.ws);
         }
       }, 1800);
@@ -956,6 +956,12 @@ export class PhoneSwitchService {
 
     if (!dest) {
       this.sendToDevice(callerDeviceId, { type: 'play_tone', tone: 'reorder' });
+      return;
+    }
+
+    // Check if destination is a special service line (411, 111, 119, 711, 567, etc.)
+    if (['411', '111', '119', '099', '711', '567', '300', '069', '078', '079'].includes(dest)) {
+      await this.processCompletedDialBuffer(callerDeviceId, dest);
       return;
     }
 
@@ -1269,7 +1275,7 @@ export class PhoneSwitchService {
     );
 
     if (voicemails.length === 0) {
-      const speech = TtsAudioService.synthesizeSpeech('You have no messages in your voicemail inbox.');
+      const speech = await TtsAudioService.synthesizeSpeech('You have no messages in your voicemail inbox.');
       if (client?.ws) serviceLinesService.startRawPcmPlaybackSession(deviceId, speech, client.ws);
       return;
     }
@@ -1277,13 +1283,13 @@ export class PhoneSwitchService {
     // Synthesize full audio mailbox playlist
     const audioParts: Buffer[] = [];
     const countText = `You have ${voicemails.length} ${voicemails.length === 1 ? 'message' : 'messages'} in your voicemail inbox.`;
-    audioParts.push(TtsAudioService.synthesizeSpeech(countText));
+    audioParts.push(await TtsAudioService.synthesizeSpeech(countText));
     audioParts.push(Buffer.alloc(TtsAudioService.SAMPLE_RATE * 0.8 * 2)); // 800ms silence
 
     for (let i = 0; i < voicemails.length; i++) {
       const vm = voicemails[i];
       const callerText = `Message ${i + 1} from extension ${vm.caller_number}.`;
-      audioParts.push(TtsAudioService.synthesizeSpeech(callerText));
+      audioParts.push(await TtsAudioService.synthesizeSpeech(callerText));
       audioParts.push(TtsAudioService.generateSineTone(800, 200, 0.4)); // In-ear pip tone
       audioParts.push(Buffer.alloc(TtsAudioService.SAMPLE_RATE * 0.4 * 2));
 
@@ -1294,7 +1300,7 @@ export class PhoneSwitchService {
       audioParts.push(Buffer.alloc(TtsAudioService.SAMPLE_RATE * 1.0 * 2));
     }
 
-    audioParts.push(TtsAudioService.synthesizeSpeech('End of messages.'));
+    audioParts.push(await TtsAudioService.synthesizeSpeech('End of messages.'));
     const fullMailboxAudio = Buffer.concat(audioParts);
     if (client?.ws) {
       serviceLinesService.startRawPcmPlaybackSession(deviceId, fullMailboxAudio, client.ws);

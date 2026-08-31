@@ -1,5 +1,6 @@
 import http from 'http';
 import https from 'https';
+import { spawn } from 'child_process';
 
 /**
  * DecaTone High-Quality Speech & Tone Synthesis Service
@@ -7,6 +8,7 @@ import https from 'https';
  */
 export class TtsAudioService {
   public static readonly SAMPLE_RATE = 16000;
+  private static ttsCache = new Map<string, Buffer>();
 
   /**
    * Generates a pure sine tone buffer at 16kHz
@@ -216,23 +218,96 @@ export class TtsAudioService {
 
 
   /**
-   * Formant-based phonetic voice synthesizer for clean, natural telephone voice audio
-   * Generates authentic telephone operator / announcer phonemes at 16kHz PCM
+   * Synthesizes natural spoken speech audio as 16kHz 16-bit Mono Linear PCM.
+   * Utilizes Google Neural TTS engine with automatic caching and graceful local offline fallback.
    */
-  public static synthesizeSpeech(text: string): Buffer {
-    // Clean text and split into words
+  public static async synthesizeSpeech(text: string): Promise<Buffer> {
+    const cleanText = text.trim();
+    if (!cleanText) return Buffer.alloc(0);
+
+    if (this.ttsCache.has(cleanText)) {
+      return this.ttsCache.get(cleanText)!;
+    }
+
+    try {
+      const pcm = await this.fetchOnlineTts(cleanText);
+      if (pcm && pcm.length > 0) {
+        if (this.ttsCache.size > 200) {
+          const firstKey = this.ttsCache.keys().next().value;
+          if (firstKey) this.ttsCache.delete(firstKey);
+        }
+        this.ttsCache.set(cleanText, pcm);
+        return pcm;
+      }
+    } catch (err) {
+      console.warn('[TTS] Online speech synthesis unavailable, using procedural fallback:', err);
+    }
+
+    return this.synthesizeProceduralSpeech(cleanText);
+  }
+
+  /**
+   * Fetches TTS MP3 from Google Translate TTS endpoint and transcodes directly to 16kHz 16-bit PCM
+   */
+  private static fetchOnlineTts(text: string): Promise<Buffer> {
+    return new Promise((resolve, reject) => {
+      const url = `https://translate.google.com/translate_tts?ie=UTF-8&tl=en&client=tw-ob&q=${encodeURIComponent(text)}`;
+      
+      const req = https.get(url, { headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' } }, (res) => {
+        if (res.statusCode !== 200) {
+          return reject(new Error(`TTS Service returned HTTP ${res.statusCode}`));
+        }
+
+        const ffmpeg = spawn('ffmpeg', [
+          '-i', 'pipe:0',
+          '-f', 's16le',
+          '-acodec', 'pcm_s16le',
+          '-ac', '1',
+          '-ar', '16000',
+          'pipe:1'
+        ]);
+
+        const chunks: Buffer[] = [];
+        res.pipe(ffmpeg.stdin);
+
+        ffmpeg.stdout.on('data', (chunk: Buffer) => chunks.push(chunk));
+        ffmpeg.stderr.on('data', () => {}); // silence ffmpeg logs
+
+        ffmpeg.on('close', (code) => {
+          if (code === 0) {
+            resolve(Buffer.concat(chunks));
+          } else {
+            reject(new Error(`ffmpeg exited with code ${code}`));
+          }
+        });
+
+        ffmpeg.on('error', (err) => {
+          reject(err);
+        });
+      });
+
+      req.on('error', (err) => reject(err));
+      req.setTimeout(4000, () => {
+        req.destroy();
+        reject(new Error('TTS request timed out'));
+      });
+    });
+  }
+
+  /**
+   * Formant-based phonetic voice synthesizer for offline fallback
+   */
+  public static synthesizeProceduralSpeech(text: string): Buffer {
     const words = text.toLowerCase().replace(/[^a-z0-9\s:,\.\-]/g, '').split(/\s+/).filter(Boolean);
     const pcmChunks: Buffer[] = [];
 
-    // Pre-speech silence
-    pcmChunks.push(Buffer.alloc(this.SAMPLE_RATE * 0.15 * 2)); // 150ms silence
+    pcmChunks.push(Buffer.alloc(this.SAMPLE_RATE * 0.15 * 2)); // 150ms pre-speech silence
 
     for (let w = 0; w < words.length; w++) {
       const word = words[w];
       const wordAudio = this.synthesizeWord(word);
       pcmChunks.push(wordAudio);
 
-      // Inter-word pause
       const pauseDuration = word.endsWith('.') || word.endsWith(':') ? 0.35 : (word.endsWith(',') ? 0.2 : 0.08);
       pcmChunks.push(Buffer.alloc(Math.floor(this.SAMPLE_RATE * pauseDuration * 2)));
     }
@@ -241,7 +316,6 @@ export class TtsAudioService {
   }
 
   private static synthesizeWord(word: string): Buffer {
-    // Phonetic formant frequencies for English vowel sounds (F1, F2, F3 in Hz)
     const formants: Record<string, [number, number, number]> = {
       'a': [700, 1220, 2600],
       'e': [530, 1840, 2480],
@@ -251,13 +325,11 @@ export class TtsAudioService {
       'neutral': [500, 1500, 2500]
     };
 
-    // Duration estimation based on word length
     const cleanWord = word.replace(/[^a-z0-9]/g, '');
     const durationMs = Math.max(160, Math.min(600, cleanWord.length * 65 + 80));
     const totalSamples = Math.floor((this.SAMPLE_RATE * durationMs) / 1000);
     const buffer = Buffer.alloc(totalSamples * 2);
 
-    // Base pitch modulation (120Hz to 135Hz for warm natural human vocal cord pulse)
     const basePitch = 125.0;
     let primaryVowel = 'neutral';
     for (const char of cleanWord) {
@@ -269,21 +341,16 @@ export class TtsAudioService {
     const [f1, f2, f3] = formants[primaryVowel] || formants['neutral'];
 
     for (let i = 0; i < totalSamples; i++) {
-      const t = i / this.SAMPLE_RATE;
       const progress = i / totalSamples;
-
-      // Natural pitch intonation curve (warm vocal pitch)
       const pitchIntonation = basePitch * (1.0 + 0.06 * Math.sin(Math.PI * progress));
       const f0Period = this.SAMPLE_RATE / pitchIntonation;
       const pulsePhase = (i % Math.floor(f0Period)) / f0Period;
 
-      // Formant resonators excited by glottal closure
       const formantDecay = Math.exp(-pulsePhase * 7.5);
       const res1 = Math.sin(2.0 * Math.PI * f1 * (pulsePhase / pitchIntonation)) * 0.55;
       const res2 = Math.sin(2.0 * Math.PI * f2 * (pulsePhase / pitchIntonation)) * 0.35;
       const res3 = Math.sin(2.0 * Math.PI * f3 * (pulsePhase / pitchIntonation)) * 0.18;
 
-      // Envelope shaping
       let env = 1.0;
       if (progress < 0.18) env = progress / 0.18;
       else if (progress > 0.78) env = (1.0 - progress) / 0.22;
