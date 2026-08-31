@@ -184,9 +184,26 @@ export const WebPhoneModal: React.FC<WebPhoneModalProps> = ({ isOpen, onClose, i
             onClose();
           }}
           className="btn btn-secondary btn-icon"
-          style={{ position: 'absolute', top: '1rem', right: '1rem', width: '32px', height: '32px' }}
+          title="Close Web Softphone"
+          aria-label="Close"
+          style={{
+            position: 'absolute',
+            top: '1rem',
+            right: '1rem',
+            width: '32px',
+            height: '32px',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            color: '#f8fafc',
+            background: 'rgba(255, 255, 255, 0.1)',
+            border: '1px solid rgba(255, 255, 255, 0.25)',
+            borderRadius: '8px',
+            cursor: 'pointer',
+            zIndex: 10
+          }}
         >
-          <X size={16} />
+          <X size={18} color="#f8fafc" strokeWidth={2.5} />
         </button>
 
         {/* Modal Header */}

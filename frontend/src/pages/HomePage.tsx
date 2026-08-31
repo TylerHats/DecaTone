@@ -250,6 +250,68 @@ export const HomePage: React.FC = () => {
               })}
             </div>
           </div>
+
+          {/* Cute Blue Service Extensions Boxes */}
+          <div style={{ width: '100%', borderTop: '1px solid var(--border-subtle)', paddingTop: '1.25rem' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem' }}>
+              <span style={{ fontSize: '0.85rem', fontWeight: '700', color: '#38bdf8', textTransform: 'uppercase', letterSpacing: '0.05em', display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                <Zap size={14} color="#38bdf8" /> Telephony Service Lines
+              </span>
+              <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>Click to Dial</span>
+            </div>
+
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '0.6rem' }}>
+              {[
+                { code: '411', label: 'Speaking Clock', desc: 'NIST Time & Date' },
+                { code: '111', label: 'Ringback Test', desc: 'Rings Your Bell' },
+                { code: '119', label: 'Echo Loopback', desc: 'Audio Latency Check' },
+                { code: '711', label: 'Live Weather', desc: 'Local Forecast' },
+                { code: '567', label: '56k Modem', desc: 'Handshake Simulator' },
+                { code: '0', label: 'Voicemail Box', desc: 'Voice Messages' },
+                { code: '069', label: 'Call Return', desc: 'Redial Last Caller' },
+                { code: '078', label: 'Toggle DND', desc: 'Quiet Hours On/Off' }
+              ].map((svc) => (
+                <button
+                  key={svc.code}
+                  onClick={() => handleDial(svc.code)}
+                  style={{
+                    background: 'rgba(14, 165, 233, 0.08)',
+                    border: '1px solid rgba(56, 189, 248, 0.28)',
+                    borderRadius: '10px',
+                    padding: '0.65rem 0.75rem',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    alignItems: 'flex-start',
+                    gap: '0.2rem',
+                    cursor: 'pointer',
+                    transition: 'all 0.2s cubic-bezier(0.4, 0, 0.2, 1)',
+                    textAlign: 'left'
+                  }}
+                  onMouseEnter={(e) => {
+                    e.currentTarget.style.background = 'rgba(14, 165, 233, 0.18)';
+                    e.currentTarget.style.borderColor = 'rgba(56, 189, 248, 0.55)';
+                    e.currentTarget.style.transform = 'translateY(-2px)';
+                    e.currentTarget.style.boxShadow = '0 4px 14px rgba(14, 165, 233, 0.25)';
+                  }}
+                  onMouseLeave={(e) => {
+                    e.currentTarget.style.background = 'rgba(14, 165, 233, 0.08)';
+                    e.currentTarget.style.borderColor = 'rgba(56, 189, 248, 0.28)';
+                    e.currentTarget.style.transform = 'translateY(0)';
+                    e.currentTarget.style.boxShadow = 'none';
+                  }}
+                >
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%' }}>
+                    <span style={{ fontFamily: 'var(--font-mono)', fontWeight: '800', fontSize: '0.85rem', color: '#38bdf8', background: 'rgba(56, 189, 248, 0.18)', padding: '0.15rem 0.45rem', borderRadius: '5px' }}>
+                      {svc.code}
+                    </span>
+                    <PhoneOutgoing size={12} color="#38bdf8" />
+                  </div>
+                  <strong style={{ fontSize: '0.825rem', color: '#f1f5f9', marginTop: '0.15rem' }}>{svc.label}</strong>
+                  <span style={{ fontSize: '0.725rem', color: 'var(--text-muted)' }}>{svc.desc}</span>
+                </button>
+              ))}
+            </div>
+          </div>
         </div>
 
         {/* Right Column: Hardware Telephony Status & Call Logs */}

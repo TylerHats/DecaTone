@@ -796,27 +796,79 @@ export class PhoneSwitchService {
     // 1. Service lines
     if (buffer === '111') {
       // 111: Ringback Line Test
-      if (client?.ws) serviceLinesService.startRingbackTestSession(deviceId, client.userId, client.ws);
+      if (client?.ws) {
+        client.ws.send(JSON.stringify({
+          type: 'call_connected',
+          callId: `SVC-111-${Date.now()}`,
+          calleeNumber: '111',
+          calleeName: 'Ringback Test Service'
+        }));
+        await serviceLinesService.startRingbackTestSession(deviceId, client.userId, client.ws);
+      }
       return;
     }
     if (buffer === '119' || buffer === '099') {
       // 119: Sidetone & Loopback Echo Test
-      if (client?.ws) serviceLinesService.startLoopbackSession(deviceId, client.ws);
+      if (client?.ws) {
+        client.ws.send(JSON.stringify({
+          type: 'call_connected',
+          callId: `SVC-119-${Date.now()}`,
+          calleeNumber: '119',
+          calleeName: 'Audio Loopback Echo Test'
+        }));
+        await serviceLinesService.startLoopbackSession(deviceId, client.ws);
+      }
       return;
     }
     if (buffer === '411') {
       // 411: Speaking Clock
-      if (client?.ws) serviceLinesService.startSpeakingClockSession(deviceId, client.ws);
+      if (client?.ws) {
+        client.ws.send(JSON.stringify({
+          type: 'call_connected',
+          callId: `SVC-411-${Date.now()}`,
+          calleeNumber: '411',
+          calleeName: 'Speaking Clock Service'
+        }));
+        await serviceLinesService.startSpeakingClockSession(deviceId, client.ws);
+        client.ws.send(JSON.stringify({
+          type: 'call_ended',
+          reason: 'service_completed'
+        }));
+      }
       return;
     }
     if (buffer === '567' || buffer === '300') {
       // 567: Dial-Up Modem Handshake Simulator
-      if (client?.ws) serviceLinesService.startModemHandshakeSession(deviceId, client.ws);
+      if (client?.ws) {
+        client.ws.send(JSON.stringify({
+          type: 'call_connected',
+          callId: `SVC-567-${Date.now()}`,
+          calleeNumber: '567',
+          calleeName: 'Dial-Up Modem Simulator'
+        }));
+        await serviceLinesService.startModemHandshakeSession(deviceId, client.ws);
+        client.ws.send(JSON.stringify({
+          type: 'call_ended',
+          reason: 'service_completed'
+        }));
+      }
       return;
     }
     if (buffer === '711') {
       // 711: Local Weather Forecast
-      if (client?.ws) serviceLinesService.startWeatherSession(deviceId, client?.ipAddress, client.ws);
+      if (client?.ws) {
+        client.ws.send(JSON.stringify({
+          type: 'call_connected',
+          callId: `SVC-711-${Date.now()}`,
+          calleeNumber: '711',
+          calleeName: 'Automated Weather Hotline'
+        }));
+        await serviceLinesService.startWeatherSession(deviceId, client?.ipAddress, client.ws);
+        client.ws.send(JSON.stringify({
+          type: 'call_ended',
+          reason: 'service_completed'
+        }));
+      }
       return;
     }
     if (buffer === '069' && client?.userId) {

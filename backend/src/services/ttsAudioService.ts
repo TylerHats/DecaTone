@@ -272,23 +272,23 @@ export class TtsAudioService {
       const t = i / this.SAMPLE_RATE;
       const progress = i / totalSamples;
 
-      // Natural pitch intonation curve (slight rise-fall)
-      const pitchIntonation = basePitch * (1.0 + 0.08 * Math.sin(Math.PI * progress));
+      // Natural pitch intonation curve (warm vocal pitch)
+      const pitchIntonation = basePitch * (1.0 + 0.06 * Math.sin(Math.PI * progress));
       const f0Period = this.SAMPLE_RATE / pitchIntonation;
       const pulsePhase = (i % Math.floor(f0Period)) / f0Period;
 
-      // Vocal tract pulse + Formant resonance filtering
-      const glottalPulse = Math.sin(2.0 * Math.PI * pulsePhase) * Math.exp(-3.0 * pulsePhase);
-      const res1 = Math.sin(2.0 * Math.PI * f1 * t) * 0.5;
-      const res2 = Math.sin(2.0 * Math.PI * f2 * t) * 0.3;
-      const res3 = Math.sin(2.0 * Math.PI * f3 * t) * 0.15;
+      // Formant resonators excited by glottal closure
+      const formantDecay = Math.exp(-pulsePhase * 7.5);
+      const res1 = Math.sin(2.0 * Math.PI * f1 * (pulsePhase / pitchIntonation)) * 0.55;
+      const res2 = Math.sin(2.0 * Math.PI * f2 * (pulsePhase / pitchIntonation)) * 0.35;
+      const res3 = Math.sin(2.0 * Math.PI * f3 * (pulsePhase / pitchIntonation)) * 0.18;
 
-      // Envelope shaping (smooth attack & decay)
+      // Envelope shaping
       let env = 1.0;
-      if (progress < 0.15) env = progress / 0.15;
-      else if (progress > 0.8) env = (1.0 - progress) / 0.2;
+      if (progress < 0.18) env = progress / 0.18;
+      else if (progress > 0.78) env = (1.0 - progress) / 0.22;
 
-      const sample = glottalPulse * (res1 + res2 + res3) * env * 0.7 * 32767.0;
+      const sample = (res1 + res2 + res3) * formantDecay * env * 0.42 * 32767.0;
       buffer.writeInt16LE(Math.max(-32768, Math.min(32767, Math.round(sample))), i * 2);
     }
 
