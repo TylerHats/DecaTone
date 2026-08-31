@@ -189,11 +189,41 @@ export class PhoneSwitchService {
   ) {
     const { type, deviceId } = msg;
 
-    // Web Client Handshake
+    // Web Softphone Handshake
     if (type === 'web_client_init') {
+      const webDeviceId = msg.deviceId || `WEB-${msg.userId || 'CLIENT'}-${Math.floor(1000 + Math.random() * 9000)}`;
+      setRegisteredDeviceId(webDeviceId);
+
+      let user: any = null;
+      if (msg.userId) {
+        user = await queryOne<any>('SELECT id, username, display_name, phone_number FROM users WHERE id = ?', [msg.userId]);
+      }
+
+      const client: PhoneSocketClient = {
+        ws,
+        deviceId: webDeviceId,
+        userId: user?.id || msg.userId,
+        phoneNumber: user?.phone_number,
+        ipAddress: ip,
+        lastHeartbeat: Date.now()
+      };
+
+      this.phoneClients.set(webDeviceId, client);
       this.registerWebClient(ws);
-      ws.send(JSON.stringify({ type: 'web_client_ack', status: 'connected' }));
+
+      ws.send(JSON.stringify({
+        type: 'web_client_ack',
+        status: 'connected',
+        deviceId: webDeviceId,
+        phoneNumber: user?.phone_number
+      }));
       return;
+    }
+
+    if (type === 'factory_reset' && deviceId) {
+      console.log(`[Switch] 🔘 Factory Reset notification received for ${deviceId}. Unpairing device...`);
+      await execute('UPDATE phones SET user_id = NULL, paired_at = NULL WHERE device_id = ?', [deviceId]);
+      await execute('DELETE FROM pending_device_enrollments WHERE device_id = ?', [deviceId]);
     }
 
     if (!deviceId) return;
@@ -201,8 +231,14 @@ export class PhoneSwitchService {
     switch (type) {
       case 'register':
       case 'handshake': {
-        const { mac, firmwareVersion, rssi, hardwareProfile, bellFrequencyHz, hookFlashEnabled } = msg;
+        const { mac, firmwareVersion, rssi, hardwareProfile, bellFrequencyHz, hookFlashEnabled, isReset } = msg;
         setRegisteredDeviceId(deviceId);
+
+        if (isReset) {
+          console.log(`[Switch] 🔘 Device ${deviceId} flagged as reset. Unpairing...`);
+          await execute('UPDATE phones SET user_id = NULL, paired_at = NULL WHERE device_id = ?', [deviceId]);
+          await execute('DELETE FROM pending_device_enrollments WHERE device_id = ?', [deviceId]);
+        }
 
         let phone = await queryOne<any>('SELECT * FROM phones WHERE device_id = ?', [deviceId]);
         if (!phone) {
@@ -213,8 +249,8 @@ export class PhoneSwitchService {
               deviceId,
               mac || '',
               ip,
-              firmwareVersion || '1.2.0',
-              rssi || 0,
+              firmwareVersion || '1.2.2',
+              rssi || -52,
               hardwareProfile || 'western_electric_500',
               bellFrequencyHz || 20.0,
               hookFlashEnabled !== false ? 1 : 0
@@ -224,7 +260,7 @@ export class PhoneSwitchService {
         } else {
           await execute(
             `UPDATE phones SET is_online = 1, last_seen = CURRENT_TIMESTAMP, ip_address = ?, firmware_version = ?, rssi = ?, hardware_profile = ?, bell_frequency_hz = ? WHERE device_id = ?`,
-            [ip, firmwareVersion || phone.firmware_version, rssi || 0, hardwareProfile || 'western_electric_500', bellFrequencyHz || 20.0, deviceId]
+            [ip, firmwareVersion || phone.firmware_version || '1.2.2', rssi || -52, hardwareProfile || phone.hardware_profile || 'western_electric_500', bellFrequencyHz || phone.bell_frequency_hz || 20.0, deviceId]
           );
         }
 
@@ -236,6 +272,42 @@ export class PhoneSwitchService {
              FROM users WHERE id = ?`,
             [phone.user_id]
           );
+        }
+
+        let pairingWord = '---';
+        let pairingCode = '---';
+        let fullPairingCode = '---';
+
+        // If phone is unclaimed, generate or retrieve pending Word + 4-digit code
+        if (!phone.user_id) {
+          let pending = await queryOne<any>(
+            'SELECT * FROM pending_device_enrollments WHERE device_id = ? AND expires_at > datetime("now")',
+            [deviceId]
+          );
+
+          if (!pending) {
+            const WORDS = ['TONE', 'BELL', 'RING', 'DIAL', 'ECHO', 'WIRE', 'POST', 'HOOK', 'ROTR', 'DESK', 'CALL', 'PULSE', 'LINE', 'SWCH'];
+            pairingWord = WORDS[Math.floor(Math.random() * WORDS.length)];
+            pairingCode = Math.floor(1000 + Math.random() * 9000).toString();
+            fullPairingCode = `${pairingWord}-${pairingCode}`;
+
+            await execute(
+              `INSERT OR REPLACE INTO pending_device_enrollments (device_id, ip_address, pairing_code_word, pairing_code_numeric, pairing_code, expires_at)
+               VALUES (?, ?, ?, ?, ?, datetime('now', '+24 hours'))`,
+              [deviceId, ip, pairingWord, pairingCode, fullPairingCode]
+            );
+          } else {
+            pairingWord = pending.pairing_code_word;
+            pairingCode = pending.pairing_code_numeric;
+            fullPairingCode = pending.pairing_code || `${pairingWord}-${pairingCode}`;
+          }
+
+          ws.send(JSON.stringify({
+            type: 'pairing_info',
+            word: pairingWord,
+            code: pairingCode,
+            fullCode: fullPairingCode
+          }));
         }
 
         const client: PhoneSocketClient = {
@@ -255,7 +327,11 @@ export class PhoneSwitchService {
             status: 'registered',
             deviceId,
             isPaired: !!phone.user_id,
+            ownerUsername: user?.username || null,
             phoneNumber: user?.phone_number || null,
+            pairingWord,
+            pairingCode,
+            fullPairingCode,
             earpieceVolume: phone.earpiece_volume ?? 80,
             micSensitivity: phone.mic_sensitivity ?? 80,
             audioProfile: phone.audio_profile || 'vintage_pots',
@@ -273,13 +349,17 @@ export class PhoneSwitchService {
           deviceId,
           isOnline: true,
           isPaired: !!phone.user_id,
+          ownerUsername: user?.username || null,
           phoneNumber: user?.phone_number || null,
+          pairingWord,
+          pairingCode,
+          fullPairingCode,
           hardwareProfile: phone.hardware_profile,
           bellFrequencyHz: phone.bell_frequency_hz
         });
 
         homeAssistantMqttService.registerPhoneDiscovery(phone, user).catch(e => console.error(e));
-        console.log(`[Switch] ESP32-S3 registered: ${deviceId} (${ip}) - Bell: ${phone.bell_frequency_hz || 20}Hz`);
+        console.log(`[Switch] Telephone registered: ${deviceId} (${ip}) - Paired: ${!!phone.user_id} - Bell: ${phone.bell_frequency_hz || 20}Hz`);
         break;
       }
 

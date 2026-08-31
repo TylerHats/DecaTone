@@ -244,6 +244,7 @@ export const AdminDashboardPage: React.FC = () => {
     try {
       const res = await fetch(`/api/admin/users/${selectedUserForNumber.id}/phone-number`, {
         method: 'PUT',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
         body: JSON.stringify({ phoneNumber: newNumberInput, areaCode: newAreaCodeInput })
       });
       const data = await res.json();

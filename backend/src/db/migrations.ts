@@ -39,20 +39,31 @@ export async function runMigrations() {
     await execute(`
       CREATE TABLE IF NOT EXISTS phones (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
-        user_id INTEGER UNIQUE REFERENCES users(id) ON DELETE SET NULL,
+        user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
         device_id TEXT UNIQUE NOT NULL,
         mac_address TEXT,
         ip_address TEXT,
-        firmware_version TEXT DEFAULT '1.0.0',
+        phone_label TEXT DEFAULT 'Main Phone',
+        ring_enabled INTEGER DEFAULT 1,
+        firmware_version TEXT DEFAULT '1.2.2',
         rssi INTEGER DEFAULT 0,
         is_online INTEGER DEFAULT 0,
         hook_state TEXT DEFAULT 'on_hook',
         call_state TEXT DEFAULT 'idle',
         earpiece_volume INTEGER DEFAULT 80,
         mic_sensitivity INTEGER DEFAULT 80,
+        audio_profile TEXT DEFAULT 'vintage_pots',
+        sidetone_level INTEGER DEFAULT 10,
         ring_style TEXT DEFAULT 'traditional',
         ring_cadence_custom TEXT DEFAULT '2000,4000',
         ring_timeout_sec INTEGER DEFAULT 25,
+        hardware_profile TEXT DEFAULT 'western_electric_500',
+        bell_frequency_hz REAL DEFAULT 20.0,
+        intercom_enabled INTEGER DEFAULT 1,
+        hook_flash_enabled INTEGER DEFAULT 1,
+        ota_auto_update_enabled INTEGER DEFAULT 1,
+        ota_update_time TEXT DEFAULT '03:00',
+        ota_update_channel TEXT DEFAULT 'stable',
         last_seen DATETIME,
         paired_at DATETIME,
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP
@@ -363,6 +374,8 @@ This system is self-hosted and **never sells or shares your personal information
           ip_address TEXT,
           pairing_code_word TEXT NOT NULL,
           pairing_code_numeric TEXT NOT NULL,
+          pairing_code TEXT,
+          expires_at DATETIME,
           created_at DATETIME DEFAULT CURRENT_TIMESTAMP
         )
       `);
@@ -478,14 +491,17 @@ This system is self-hosted and **never sells or shares your personal information
 
       // Copy existing phones into phones_v10
       await execute(`
-        INSERT OR IGNORE INTO phones_v10 (
-          id, user_id, device_id, mac_address, ip_address, firmware_version, rssi, is_online,
-          hook_state, call_state, earpiece_volume, mic_sensitivity, audio_profile, sidetone_level,
-          ring_style, ring_cadence_custom, ring_timeout_sec, hardware_profile, bell_frequency_hz,
-          intercom_enabled, call_forwarding_enabled, forward_to_number, last_seen, paired_at, created_at
+        INSERT INTO phones_v10 (
+          id, user_id, device_id, phone_label, ring_enabled, mac_address, ip_address,
+          firmware_version, rssi, is_online,
+          hook_state, call_state, earpiece_volume, mic_sensitivity,
+          audio_profile, sidetone_level, ring_style, ring_cadence_custom, ring_timeout_sec,
+          hardware_profile, bell_frequency_hz, intercom_enabled, hook_flash_enabled,
+          call_forwarding_enabled, forward_to_number, last_seen, paired_at, created_at
         )
         SELECT 
-          id, user_id, device_id, mac_address, ip_address, firmware_version, rssi, is_online,
+          id, user_id, device_id, 'Main Phone', 1, mac_address, ip_address,
+          COALESCE(firmware_version, '1.2.2'), COALESCE(rssi, 0), COALESCE(is_online, 0),
           hook_state, call_state, earpiece_volume, mic_sensitivity,
           COALESCE(audio_profile, 'vintage_pots'),
           COALESCE(sidetone_level, 10),
@@ -495,6 +511,7 @@ This system is self-hosted and **never sells or shares your personal information
           COALESCE(hardware_profile, 'western_electric_500'),
           COALESCE(bell_frequency_hz, 20.0),
           COALESCE(intercom_enabled, 1),
+          COALESCE(hook_flash_enabled, 1),
           COALESCE(call_forwarding_enabled, 0),
           forward_to_number, last_seen, paired_at, created_at
         FROM phones
@@ -509,6 +526,7 @@ This system is self-hosted and **never sells or shares your personal information
       // Fallback in case table already exists or altered
       try { await execute(`ALTER TABLE phones ADD COLUMN phone_label TEXT DEFAULT 'Main Phone'`); } catch (err) {}
       try { await execute(`ALTER TABLE phones ADD COLUMN ring_enabled INTEGER DEFAULT 1`); } catch (err) {}
+      try { await execute(`ALTER TABLE phones ADD COLUMN hook_flash_enabled INTEGER DEFAULT 1`); } catch (err) {}
     }
 
     await execute("INSERT INTO schema_migrations (version) VALUES (10)");
@@ -547,6 +565,27 @@ This system is self-hosted and **never sells or shares your personal information
 
     await execute("INSERT INTO schema_migrations (version) VALUES (11)");
     console.log("Migration 11 applied successfully.");
+  }
+
+  if (currentVersion < 12) {
+    console.log("Running Migration 12: Ensuring hook_flash_enabled column exists...");
+    try {
+      await execute(`ALTER TABLE phones ADD COLUMN hook_flash_enabled INTEGER DEFAULT 1`);
+    } catch (e) {}
+    await execute("INSERT INTO schema_migrations (version) VALUES (12)");
+    console.log("Migration 12 applied successfully.");
+  }
+
+  if (currentVersion < 13) {
+    console.log("Running Migration 13: Adding pairing_code and expires_at to pending_device_enrollments...");
+    try {
+      await execute(`ALTER TABLE pending_device_enrollments ADD COLUMN pairing_code TEXT`);
+    } catch (e) {}
+    try {
+      await execute(`ALTER TABLE pending_device_enrollments ADD COLUMN expires_at DATETIME`);
+    } catch (e) {}
+    await execute("INSERT INTO schema_migrations (version) VALUES (13)");
+    console.log("Migration 13 applied successfully.");
   }
 }
 

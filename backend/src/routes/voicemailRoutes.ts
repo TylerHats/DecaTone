@@ -52,6 +52,51 @@ router.get('/', async (req: AuthenticatedRequest, res: Response) => {
   }
 });
 
+// Get User Greeting Info
+router.get('/greeting', async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const greeting = await queryOne<any>(
+      'SELECT audio_url, is_custom, updated_at FROM voicemail_greetings WHERE user_id = ?',
+      [req.user!.id]
+    );
+
+    return res.json({
+      hasCustomGreeting: !!greeting?.is_custom,
+      audioUrl: greeting?.audio_url || null,
+      updatedAt: greeting?.updated_at || null
+    });
+  } catch (err) {
+    return res.status(500).json({ error: 'Failed to fetch greeting info' });
+  }
+});
+
+// Stream User Greeting Audio
+router.get('/greeting/audio', async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const greeting = await queryOne<any>(
+      'SELECT audio_url FROM voicemail_greetings WHERE user_id = ?',
+      [req.user!.id]
+    );
+
+    if (!greeting || !greeting.audio_url) {
+      return res.status(404).send('No custom greeting recorded');
+    }
+
+    const filename = path.basename(greeting.audio_url);
+    const filePath = path.join(greetingsDir, filename);
+
+    if (!fs.existsSync(filePath)) {
+      return res.status(404).send('Greeting audio file not found on disk');
+    }
+
+    res.setHeader('Content-Type', 'audio/wav');
+    res.setHeader('Cache-Control', 'no-cache');
+    fs.createReadStream(filePath).pipe(res);
+  } catch (err) {
+    return res.status(500).send('Error streaming greeting audio');
+  }
+});
+
 // Stream Decrypted Voicemail Audio (Zero-Access Decryption)
 router.get('/:id/audio', async (req: AuthenticatedRequest, res: Response) => {
   try {

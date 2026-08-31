@@ -26,13 +26,15 @@ import {
   PlusCircle,
   Trash2,
   PauseCircle,
-  ExternalLink
+  ExternalLink,
+  Signal,
+  CheckCircle2,
+  AlertCircle,
+  Wrench
 } from 'lucide-react';
 import { usePhone } from '../context/PhoneContext';
 import { useAuth } from '../context/AuthContext';
 import { WebPhoneModal } from '../components/WebPhoneModal';
-
-const PAIRING_WORDS = ['TONE', 'CALL', 'DIAL', 'RING', 'BELL', 'CORD', 'VINTAGE'];
 
 export const PhoneSettingsPage: React.FC = () => {
   const {
@@ -43,14 +45,13 @@ export const PhoneSettingsPage: React.FC = () => {
     updatePhoneSettings,
     testRingDevice,
     rebootDevice,
-    claimPhone,
     claimPhoneByCode,
     unclaimDevice,
     fetchPhones
   } = usePhone();
   const { user, refreshUser } = useAuth();
 
-  const [activeTab, setActiveTab] = useState<'standard' | 'resonance' | 'services' | 'account' | 'advanced'>('standard');
+  const [activeTab, setActiveTab] = useState<'standard' | 'resonance' | 'diagnostics' | 'services' | 'account'>('standard');
   const [showWebPhone, setShowWebPhone] = useState(false);
   const [showPairingModal, setShowPairingModal] = useState(false);
 
@@ -72,10 +73,7 @@ export const PhoneSettingsPage: React.FC = () => {
   const [otaUpdateChannel, setOtaUpdateChannel] = useState('stable');
 
   // Pairing State
-  const [selectedWord, setSelectedWord] = useState('TONE');
-  const [numericPairingCode, setNumericPairingCode] = useState('');
-  const [deviceIdInput, setDeviceIdInput] = useState('');
-  const [newPhoneLabel, setNewPhoneLabel] = useState('Secondary Phone');
+  const [pairingCodeInput, setPairingCodeInput] = useState('');
   const [claiming, setClaiming] = useState(false);
 
   // Account Preferences & DND State
@@ -95,13 +93,20 @@ export const PhoneSettingsPage: React.FC = () => {
   );
 
   // Voicemail Greeting state
-  const [greetingInfo, setGreetingInfo] = useState<{ hasCustomGreeting: boolean; greetingUrl?: string } | null>(null);
+  const [greetingInfo, setGreetingInfo] = useState<{ hasCustomGreeting: boolean; audioUrl?: string } | null>(null);
   const [greetingFile, setGreetingFile] = useState<File | null>(null);
   const [uploadingGreeting, setUploadingGreeting] = useState(false);
 
   // Resonance Calibration Sweep State
   const [sweepFreq, setSweepFreq] = useState(20.0);
   const [sweepActive, setSweepActive] = useState(false);
+  const [wizardRunning, setWizardRunning] = useState(false);
+  const [wizardProgress, setWizardProgress] = useState<{ freq: number; percent: number } | null>(null);
+  const [wizardResult, setWizardResult] = useState<any>(null);
+
+  // Diagnostics State
+  const [diagnosticsData, setDiagnosticsData] = useState<any>(null);
+  const [loadingDiagnostics, setLoadingDiagnostics] = useState(false);
 
   // Firmware Info & Manual OTA
   const [firmwareInfo, setFirmwareInfo] = useState<{ version: string; hasBinary: boolean; isCustomOverride?: boolean } | null>(null);
@@ -140,6 +145,7 @@ export const PhoneSettingsPage: React.FC = () => {
       setRingTimeoutSec(phone.ringTimeoutSec ?? 25);
       setHardwareProfile(phone.hardwareProfile || 'western_electric_500');
       setBellFrequencyHz(phone.bellFrequencyHz ?? 20.0);
+      setSweepFreq(phone.bellFrequencyHz ?? 20.0);
       setOtaAutoUpdateEnabled(phone.otaAutoUpdateEnabled !== false);
       setOtaUpdateTime(phone.otaUpdateTime || '03:00');
       setOtaUpdateChannel(phone.otaUpdateChannel || 'stable');
@@ -171,9 +177,30 @@ export const PhoneSettingsPage: React.FC = () => {
     } catch (e) {}
   };
 
+  const fetchDiagnostics = async () => {
+    if (!phone) return;
+    setLoadingDiagnostics(true);
+    try {
+      const res = await fetch(`/api/phone/${phone.id || ''}/diagnostics`, {
+        headers: { Authorization: `Bearer ${localStorage.getItem('decatone_token')}` }
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setDiagnosticsData(data.diagnostics);
+      }
+    } catch (e) {}
+    setLoadingDiagnostics(false);
+  };
+
   useEffect(() => {
     fetchGreeting();
   }, []);
+
+  useEffect(() => {
+    if (activeTab === 'diagnostics') {
+      fetchDiagnostics();
+    }
+  }, [activeTab, phone]);
 
   const handleSaveSettings = async () => {
     if (!phone) return;
@@ -196,131 +223,20 @@ export const PhoneSettingsPage: React.FC = () => {
         otaUpdateTime,
         otaUpdateChannel
       });
-      setToast({ type: 'success', text: `Settings saved for ${phoneLabel} (${phone.deviceId})!` });
+      setToast({ type: 'success', text: `Settings saved for ${phoneLabel}!` });
     } catch (err: any) {
-      setToast({ type: 'error', text: err.message || 'Failed to update settings' });
+      setToast({ type: 'error', text: err.message || 'Failed to save settings' });
     } finally {
       setSaving(false);
     }
   };
 
-  const handleVolumeChange = (vol: number) => {
-    setEarpieceVolume(vol);
-    if (phone) {
-      updatePhoneSettings(phone.deviceId, { earpieceVolume: vol }).catch(() => {});
-    }
-  };
-
-  const handleMicChange = (gain: number) => {
-    setMicSensitivity(gain);
-    if (phone) {
-      updatePhoneSettings(phone.deviceId, { micSensitivity: gain }).catch(() => {});
-    }
-  };
-
-  const handleSidetoneChange = (level: number) => {
-    setSidetoneLevel(level);
-    if (phone) {
-      updatePhoneSettings(phone.deviceId, { sidetoneLevel: level }).catch(() => {});
-    }
-  };
-
-  const handleTestRing = async () => {
-    if (!phone) return;
-    setRinging(true);
-    try {
-      await testRingDevice(phone.deviceId, ringStyle, ringCadenceCustom);
-      setToast({ type: 'success', text: `Ring signal sent to ${phoneLabel}!` });
-    } catch (e) {
-      setToast({ type: 'error', text: 'Test ring failed' });
-    } finally {
-      setTimeout(() => setRinging(false), 2000);
-    }
-  };
-
-  const handleReboot = async () => {
-    if (!phone || !window.confirm(`Are you sure you want to reboot ${phoneLabel}?`)) return;
-    try {
-      await rebootDevice(phone.deviceId);
-      setToast({ type: 'success', text: 'Reboot command sent to phone' });
-    } catch (e) {
-      setToast({ type: 'error', text: 'Reboot command failed' });
-    }
-  };
-
-  const handleManualOtaUpdate = async () => {
-    if (!phone || !window.confirm(`Initiate Over-The-Air (OTA) firmware update on ${phoneLabel}? The phone will download the latest firmware from the switchboard and restart automatically.`)) return;
-    setUpdatingOta(true);
-    setToast(null);
-    try {
-      const res = await fetch(`/api/phone/ota-update/${phone.deviceId}`, {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${localStorage.getItem('decatone_token')}` }
-      });
-      const data = await res.json();
-      if (res.ok) {
-        setToast({ type: 'success', text: data.message });
-      } else {
-        setToast({ type: 'error', text: data.error || 'Failed to trigger OTA update' });
-      }
-    } catch (e: any) {
-      setToast({ type: 'error', text: 'Failed to trigger OTA update' });
-    } finally {
-      setUpdatingOta(false);
-    }
-  };
-
-  const handleUnclaim = async () => {
-    if (!phone || !window.confirm(`Unpair ${phoneLabel} (${phone.deviceId}) from your account?`)) return;
-    try {
-      await unclaimDevice(phone.deviceId);
-      setToast({ type: 'success', text: 'Phone successfully unpaired.' });
-    } catch (e) {
-      setToast({ type: 'error', text: 'Failed to unpair phone' });
-    }
-  };
-
-  const handlePairByWordCode = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!numericPairingCode) return;
-    setClaiming(true);
-    setToast(null);
-    try {
-      await claimPhoneByCode(selectedWord, numericPairingCode, newPhoneLabel || 'Secondary Phone');
-      setToast({ type: 'success', text: 'Hardware phone claimed and paired to your account!' });
-      setNumericPairingCode('');
-      setShowPairingModal(false);
-    } catch (err: any) {
-      setToast({ type: 'error', text: err.message || 'Pairing failed. Check digits dialed on rotary phone.' });
-    } finally {
-      setClaiming(false);
-    }
-  };
-
-  const handlePairByDeviceId = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!deviceIdInput) return;
-    setClaiming(true);
-    setToast(null);
-    try {
-      await claimPhone(deviceIdInput.trim(), newPhoneLabel || 'Secondary Phone');
-      setToast({ type: 'success', text: `Device ${deviceIdInput} paired to your account!` });
-      setDeviceIdInput('');
-      setShowPairingModal(false);
-    } catch (err: any) {
-      setToast({ type: 'error', text: err.message || 'Failed to claim device ID' });
-    } finally {
-      setClaiming(false);
-    }
-  };
-
-  const handleSaveAccount = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const handleSaveAccountPreferences = async () => {
     setSavingAccount(true);
     setToast(null);
     try {
-      const res = await fetch('/api/user/preferences', {
-        method: 'PUT',
+      const res = await fetch('/api/phone/preferences', {
+        method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           Authorization: `Bearer ${localStorage.getItem('decatone_token')}`
@@ -329,148 +245,185 @@ export const PhoneSettingsPage: React.FC = () => {
           email: emailInput,
           notifyOnVoicemail,
           notifyOnMissedCall,
-          call_privacy: callPrivacy,
-          dnd_manual_state: dndManualState ? 1 : 0,
-          dnd_schedule_enabled: dndScheduleEnabled ? 1 : 0,
-          dnd_schedule_start: dndScheduleStart,
-          dnd_schedule_end: dndScheduleEnd,
-          dnd_schedule_days: dndScheduleDays.join(','),
-          dnd_repeated_call_breakthrough: dndRepeatedCallBreakthrough ? 1 : 0
+          callPrivacy,
+          dndManualState,
+          dndScheduleEnabled,
+          dndScheduleStart,
+          dndScheduleEnd,
+          dndScheduleDays: dndScheduleDays.join(','),
+          dndRepeatedCallBreakthrough
         })
       });
 
-      if (res.ok) {
-        setToast({ type: 'success', text: 'Account preferences and DND schedule updated!' });
-        if (refreshUser) refreshUser();
-      } else {
-        const d = await res.json();
-        setToast({ type: 'error', text: d.error || 'Failed to save account settings' });
-      }
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Failed to update preferences');
+
+      await refreshUser();
+      setToast({ type: 'success', text: 'Account preferences & Do Not Disturb schedule updated!' });
     } catch (err: any) {
-      setToast({ type: 'error', text: err.message || 'Network error saving settings' });
+      setToast({ type: 'error', text: err.message });
     } finally {
       setSavingAccount(false);
     }
   };
 
-  const handleSweepTest = async (freqHz: number) => {
+  const handleSweepTest = async (freqToTest: number) => {
     if (!phone) return;
-    setSweepFreq(freqHz);
     setSweepActive(true);
+    setSweepFreq(freqToTest);
+    setBellFrequencyHz(freqToTest);
     try {
-      await fetch('/api/phone/resonance-sweep', {
+      const res = await fetch('/api/phone/resonance-sweep', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           Authorization: `Bearer ${localStorage.getItem('decatone_token')}`
         },
-        body: JSON.stringify({ deviceId: phone.deviceId, frequencyHz: freqHz, durationSec: 3.0 })
-      });
-      setToast({ type: 'success', text: `Testing bell coils at ${freqHz.toFixed(1)} Hz...` });
-    } catch (e) {
-      setToast({ type: 'error', text: 'Resonance sweep test failed' });
-    } finally {
-      setTimeout(() => setSweepActive(false), 3200);
-    }
-  };
-
-  const handleUploadGreeting = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!greetingFile) return;
-    setUploadingGreeting(true);
-    const formData = new FormData();
-    formData.append('greeting', greetingFile);
-
-    try {
-      const res = await fetch('/api/voicemail/greeting/upload', {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${localStorage.getItem('decatone_token')}` },
-        body: formData
+        body: JSON.stringify({
+          deviceId: phone.deviceId,
+          frequencyHz: freqToTest,
+          durationMs: 3000
+        })
       });
       if (res.ok) {
-        setToast({ type: 'success', text: 'Custom voicemail greeting saved!' });
-        setGreetingFile(null);
-        fetchGreeting();
-      } else {
-        const d = await res.json();
-        setToast({ type: 'error', text: d.error || 'Upload failed' });
+        setToast({ type: 'success', text: `Resonance test ring sent at ${freqToTest.toFixed(1)} Hz (3 seconds)` });
       }
-    } catch (e) {
-      setToast({ type: 'error', text: 'Upload failed' });
+    } catch (err) {}
+    setTimeout(() => setSweepActive(false), 3200);
+  };
+
+  const handleRunResonanceWizard = async () => {
+    if (!phone) return;
+    setWizardRunning(true);
+    setWizardProgress({ freq: 15.0, percent: 0 });
+    setWizardResult(null);
+    setToast(null);
+
+    try {
+      const res = await fetch(`/api/phone/${phone.id || ''}/calibrate-resonance-wizard`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${localStorage.getItem('decatone_token')}`
+        },
+        body: JSON.stringify({ deviceId: phone.deviceId })
+      });
+
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Resonance sweep failed');
+
+      setWizardResult(data.result);
+      setBellFrequencyHz(data.result.peakFrequency);
+      setSweepFreq(data.result.peakFrequency);
+      setToast({ type: 'success', text: data.message });
+      await fetchPhones();
+    } catch (err: any) {
+      setToast({ type: 'error', text: err.message });
     } finally {
-      setUploadingGreeting(false);
+      setWizardRunning(false);
     }
   };
 
-  const handleResetGreeting = async () => {
+  const handleManualOtaUpdate = async () => {
+    if (!phone) return;
+    if (!window.confirm(`Push firmware update v${firmwareInfo?.version || 'latest'} to this telephone adapter? The device will reboot when finished.`)) return;
+
+    setUpdatingOta(true);
     try {
-      const res = await fetch('/api/voicemail/greeting/reset', {
-        method: 'DELETE',
+      const res = await fetch(`/api/admin/fleet/${phone.deviceId}/ota`, {
+        method: 'POST',
         headers: { Authorization: `Bearer ${localStorage.getItem('decatone_token')}` }
       });
+      const data = await res.json();
       if (res.ok) {
-        setToast({ type: 'success', text: 'Greeting reset to default' });
-        fetchGreeting();
+        setToast({ type: 'success', text: 'Firmware update broadcast sent! Flashing telephone...' });
+      } else {
+        setToast({ type: 'error', text: data.error || 'OTA trigger failed' });
       }
-    } catch (e) {}
-  };
-
-  const toggleDay = (day: string) => {
-    if (dndScheduleDays.includes(day)) {
-      if (dndScheduleDays.length > 1) {
-        setDndScheduleDays(dndScheduleDays.filter(d => d !== day));
-      }
-    } else {
-      setDndScheduleDays([...dndScheduleDays, day].sort());
+    } catch (e: any) {
+      setToast({ type: 'error', text: e.message });
+    } finally {
+      setUpdatingOta(false);
     }
   };
 
-  const dayLabels: Record<string, string> = {
-    '1': 'Mon',
-    '2': 'Tue',
-    '3': 'Wed',
-    '4': 'Thu',
-    '5': 'Fri',
-    '6': 'Sat',
-    '7': 'Sun'
+  const handlePairByCode = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!pairingCodeInput.trim()) return;
+
+    setClaiming(true);
+    setToast(null);
+    try {
+      const success = await claimPhoneByCode('', '', pairingCodeInput.trim());
+      if (success) {
+        setToast({ type: 'success', text: 'Telephone successfully paired to your account!' });
+        setShowPairingModal(false);
+        setPairingCodeInput('');
+        await fetchPhones();
+      } else {
+        setToast({ type: 'error', text: 'Invalid or expired pairing code. Please check the code shown on your telephone adapter.' });
+      }
+    } catch (err: any) {
+      setToast({ type: 'error', text: err.message });
+    } finally {
+      setClaiming(false);
+    }
+  };
+
+  const handleUnclaim = async () => {
+    if (!phone) return;
+    if (!window.confirm(`Unpair '${phoneLabel}' from your account? You can re-pair it at any time with its pairing code.`)) return;
+
+    try {
+      const ok = await unclaimDevice(phone.deviceId);
+      if (ok) {
+        setToast({ type: 'success', text: 'Telephone unpaired.' });
+        await fetchPhones();
+      }
+    } catch (err: any) {
+      setToast({ type: 'error', text: err.message });
+    }
+  };
+
+  const handleReboot = async () => {
+    if (!phone) return;
+    try {
+      const ok = await rebootDevice(phone.deviceId);
+      if (ok) {
+        setToast({ type: 'success', text: 'Reboot command sent to telephone.' });
+      }
+    } catch (err: any) {
+      setToast({ type: 'error', text: err.message });
+    }
+  };
+
+  const handleTestRing = async () => {
+    if (!phone) return;
+    setRinging(true);
+    try {
+      await testRingDevice(phone.deviceId);
+      setToast({ type: 'success', text: 'Test ring signal sent!' });
+    } catch (e: any) {
+      setToast({ type: 'error', text: e.message });
+    } finally {
+      setTimeout(() => setRinging(false), 2000);
+    }
   };
 
   return (
-    <div style={{ maxWidth: '1000px', margin: '0 auto', display: 'flex', flexDirection: 'column', gap: '2rem' }}>
-      {/* Top Header */}
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '1rem' }}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem', maxWidth: '1000px', margin: '0 auto', width: '100%' }}>
+      {/* Page Header */}
+      <div className="glass-card highlight-cyan" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '1rem' }}>
         <div>
-          <h1 style={{ fontSize: '1.75rem', marginBottom: '0.25rem' }}>Hardware & Telephony Control Center</h1>
-          <p style={{ color: 'var(--text-muted)', fontSize: '0.95rem' }}>
-            Multi-device management, party-line pickup, bell calibration, and dial codes.
+          <h1 style={{ fontSize: '1.75rem', marginBottom: '0.25rem' }}>Telephone & Account Settings</h1>
+          <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem' }}>
+            Configure bell ringer resonance, audio DSP filters, voicemail greetings, and hardware pairing.
           </p>
         </div>
 
-        {/* Tab Switcher */}
-        <div style={{ display: 'flex', gap: '0.4rem', background: 'rgba(255,255,255,0.04)', padding: '0.35rem', borderRadius: 'var(--radius-md)', flexWrap: 'wrap' }}>
-          <button
-            onClick={() => setActiveTab('standard')}
-            className={`btn btn-sm ${activeTab === 'standard' ? 'btn-primary' : 'btn-secondary'}`}
-          >
-            <Sliders size={14} /> Phones & Audio
-          </button>
-          <button
-            onClick={() => setActiveTab('resonance')}
-            className={`btn btn-sm ${activeTab === 'resonance' ? 'btn-amber' : 'btn-secondary'}`}
-          >
-            <Zap size={14} /> Resonance Wizard
-          </button>
-          <button
-            onClick={() => setActiveTab('services')}
-            className={`btn btn-sm ${activeTab === 'services' ? 'btn-primary' : 'btn-secondary'}`}
-          >
-            <HelpCircle size={14} /> Dial Codes
-          </button>
-          <button
-            onClick={() => setActiveTab('account')}
-            className={`btn btn-sm ${activeTab === 'account' ? 'btn-primary' : 'btn-secondary'}`}
-          >
-            <Moon size={14} /> DND & Account
+        <div style={{ display: 'flex', gap: '0.75rem' }}>
+          <button onClick={() => setShowWebPhone(true)} className="btn btn-primary btn-sm">
+            <PhoneCall size={16} /> Web Softphone
           </button>
         </div>
       </div>
@@ -481,6 +434,9 @@ export const PhoneSettingsPage: React.FC = () => {
             padding: '0.85rem 1.25rem',
             borderRadius: 'var(--radius-sm)',
             fontSize: '0.9rem',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '0.5rem',
             background: toast.type === 'success' ? 'rgba(16, 185, 129, 0.15)' : 'rgba(244, 63, 94, 0.15)',
             border: `1px solid ${toast.type === 'success' ? 'rgba(16, 185, 129, 0.3)' : 'rgba(244, 63, 94, 0.3)'}`,
             color: toast.type === 'success' ? '#34d399' : '#fda4af'
@@ -490,140 +446,121 @@ export const PhoneSettingsPage: React.FC = () => {
         </div>
       )}
 
-      {/* Multi-Device Header Selector */}
-      <div className="glass-card" style={{ padding: '1.25rem' }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem', flexWrap: 'wrap', gap: '0.5rem' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-            <Cpu size={18} color="var(--accent-cyan)" />
-            <strong style={{ fontSize: '1rem', color: '#fff' }}>Paired Telephones on Account ({phones.length})</strong>
-          </div>
-          <button
-            type="button"
-            onClick={() => setShowPairingModal(!showPairingModal)}
-            className="btn btn-secondary btn-sm"
-          >
-            <PlusCircle size={14} /> Pair Additional Phone
-          </button>
-        </div>
-
-        {/* List of Paired Phones */}
-        {phones.length === 0 ? (
-          <div style={{ textAlign: 'center', padding: '1.5rem', color: 'var(--text-dim)' }}>
-            No physical rotary telephones are currently paired to your account. Use the wizard below to pair your first phone!
-          </div>
-        ) : (
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: '0.75rem' }}>
-            {phones.map((p) => {
-              const isSelected = p.deviceId === selectedPhoneId;
-              return (
-                <div
-                  key={p.deviceId}
-                  onClick={() => selectPhone(p.deviceId)}
-                  style={{
-                    background: isSelected ? 'rgba(56, 189, 248, 0.12)' : 'rgba(255, 255, 255, 0.03)',
-                    border: `1px solid ${isSelected ? 'var(--accent-cyan)' : 'var(--border-subtle)'}`,
-                    borderRadius: 'var(--radius-sm)',
-                    padding: '0.85rem',
-                    cursor: 'pointer',
-                    display: 'flex',
-                    flexDirection: 'column',
-                    gap: '0.4rem',
-                    transition: 'all 0.15s ease'
-                  }}
-                >
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                    <strong style={{ color: isSelected ? 'var(--accent-cyan)' : '#fff', fontSize: '0.95rem' }}>
-                      {p.phoneLabel || 'Main Phone'}
-                    </strong>
-                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.3rem', fontSize: '0.75rem', color: p.isOnline ? '#34d399' : 'var(--text-dim)' }}>
-                      <span style={{ width: '8px', height: '8px', borderRadius: '50%', background: p.isOnline ? '#34d399' : '#64748b' }} />
-                      {p.isOnline ? 'Online' : 'Offline'}
-                    </span>
-                  </div>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '0.8rem', color: 'var(--text-dim)' }}>
-                    <code style={{ fontFamily: 'var(--font-mono)' }}>{p.deviceId}</code>
-                    <span>{p.ringEnabled !== false ? '🔔 Rings' : '🔕 Silent'}</span>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        )}
-
-        {/* Pairing Box (Collapsible / Modal) */}
-        {showPairingModal && (
-          <div style={{ marginTop: '1.25rem', paddingTop: '1.25rem', borderTop: '1px solid var(--border-subtle)' }}>
-            <h4 style={{ fontSize: '1rem', color: 'var(--accent-amber)', marginBottom: '0.5rem' }}>
-              Pair a New Hardware Phone
-            </h4>
-            <div className="grid-2" style={{ gap: '1rem' }}>
-              <form onSubmit={handlePairByDeviceId} style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
-                <label className="form-label">Option A: By Device ID</label>
-                <input
-                  type="text"
-                  placeholder="e.g. ESP32-BEDROOM-02"
-                  className="form-input"
-                  value={deviceIdInput}
-                  onChange={(e) => setDeviceIdInput(e.target.value)}
-                  required
-                />
-                <input
-                  type="text"
-                  placeholder="Phone Label (e.g. Bedroom Phone)"
-                  className="form-input"
-                  value={newPhoneLabel}
-                  onChange={(e) => setNewPhoneLabel(e.target.value)}
-                />
-                <button type="submit" disabled={claiming} className="btn btn-primary btn-sm">
-                  <Check size={14} /> {claiming ? 'Pairing...' : 'Claim Device'}
-                </button>
-              </form>
-
-              <form onSubmit={handlePairByWordCode} style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
-                <label className="form-label">Option B: By Rotary Pairing Code</label>
-                <div style={{ display: 'flex', gap: '0.5rem' }}>
-                  <select className="form-select" value={selectedWord} onChange={(e) => setSelectedWord(e.target.value)} style={{ width: '110px' }}>
-                    {PAIRING_WORDS.map(w => <option key={w} value={w}>{w}</option>)}
-                  </select>
-                  <input
-                    type="text"
-                    maxLength={4}
-                    placeholder="4 Digits"
-                    className="form-input"
-                    value={numericPairingCode}
-                    onChange={(e) => setNumericPairingCode(e.target.value.replace(/\D/g, ''))}
-                    style={{ fontFamily: 'var(--font-mono)' }}
-                    required
-                  />
-                </div>
-                <button type="submit" disabled={claiming} className="btn btn-amber btn-sm">
-                  <Check size={14} /> {claiming ? 'Pairing...' : 'Pair by Word Code'}
-                </button>
-              </form>
-            </div>
-          </div>
-        )}
+      {/* Tabs Navigation */}
+      <div style={{ display: 'flex', gap: '0.5rem', borderBottom: '1px solid var(--border-subtle)', paddingBottom: '0.5rem', overflowX: 'auto' }}>
+        {[
+          { id: 'standard', label: 'Telephone Configuration', icon: Sliders },
+          { id: 'resonance', label: 'Bell Resonance Tuning', icon: Zap },
+          { id: 'diagnostics', label: 'Hardware Diagnostics', icon: Activity },
+          { id: 'account', label: 'Account & DND Rules', icon: Moon },
+          { id: 'services', label: 'Service Lines Directory', icon: HelpCircle }
+        ].map((tab) => {
+          const Icon = tab.icon;
+          const isActive = activeTab === tab.id;
+          return (
+            <button
+              key={tab.id}
+              onClick={() => setActiveTab(tab.id as any)}
+              className={`btn btn-sm ${isActive ? 'btn-primary' : 'btn-secondary'}`}
+              style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', whiteSpace: 'nowrap' }}
+            >
+              <Icon size={16} /> {tab.label}
+            </button>
+          );
+        })}
       </div>
 
+      {/* Device Selector Card */}
+      <div className="glass-card" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '1rem' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', flexWrap: 'wrap' }}>
+          <span style={{ fontSize: '0.85rem', color: 'var(--text-muted)', fontWeight: 600 }}>Active Telephone:</span>
+          {phones.length > 0 ? (
+            <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+              {phones.map((p) => {
+                const isSelected = p.deviceId === (phone?.deviceId || selectedPhoneId);
+                return (
+                  <button
+                    key={p.deviceId}
+                    onClick={() => selectPhone(p.deviceId)}
+                    className={`btn btn-sm ${isSelected ? 'btn-primary' : 'btn-secondary'}`}
+                    style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}
+                  >
+                    <span
+                      style={{
+                        width: '8px',
+                        height: '8px',
+                        borderRadius: '50%',
+                        background: p.isOnline ? '#34d399' : '#f43f5e'
+                      }}
+                    />
+                    {p.phoneLabel || 'Telephone'}
+                  </button>
+                );
+              })}
+            </div>
+          ) : (
+            <span style={{ color: 'var(--accent-amber)', fontSize: '0.9rem' }}>
+              No telephone hardware paired yet
+            </span>
+          )}
+        </div>
+
+        <button
+          onClick={() => setShowPairingModal(!showPairingModal)}
+          className="btn btn-secondary btn-sm"
+          style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}
+        >
+          <PlusCircle size={15} /> {showPairingModal ? 'Close Pairing Form' : 'Pair New Phone'}
+        </button>
+      </div>
+
+      {/* Pairing Box */}
+      {showPairingModal && (
+        <div className="glass-card highlight-amber" style={{ padding: '1.5rem' }}>
+          <h4 style={{ fontSize: '1.1rem', color: 'var(--accent-amber)', marginBottom: '0.5rem' }}>
+            Pair a Rotary Telephone Adapter
+          </h4>
+          <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem', marginBottom: '1rem' }}>
+            Enter the Word + 4-Digit pairing code displayed on your telephone's web interface (e.g. <strong style={{ color: '#fff', fontFamily: 'var(--font-mono)' }}>TONE-4821</strong> or <strong style={{ color: '#fff', fontFamily: 'var(--font-mono)' }}>4821</strong>).
+          </p>
+
+          <form onSubmit={handlePairByCode} style={{ display: 'flex', gap: '0.75rem', maxWidth: '450px' }}>
+            <input
+              type="text"
+              className="form-input"
+              placeholder="e.g. TONE-4821 or 4821"
+              value={pairingCodeInput}
+              onChange={(e) => setPairingCodeInput(e.target.value.toUpperCase())}
+              style={{ fontFamily: 'var(--font-mono)', fontSize: '1.1rem', textAlign: 'center', letterSpacing: '0.08em' }}
+              required
+              autoFocus
+            />
+            <button type="submit" disabled={claiming || !pairingCodeInput} className="btn btn-amber" style={{ whiteSpace: 'nowrap' }}>
+              <Check size={16} /> {claiming ? 'Pairing...' : 'Claim Telephone'}
+            </button>
+          </form>
+        </div>
+      )}
+
       {/* ========================================================================= */}
-      {/* 1. PHONES & AUDIO SETTINGS TAB */}
+      {/* 1. STANDARD CONFIGURATION TAB */}
       {/* ========================================================================= */}
       {activeTab === 'standard' && phone && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
-          {/* Active Device Label & Ring Enabled Toggle */}
           <div className="glass-card">
             <h3 style={{ fontSize: '1.15rem', marginBottom: '1rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-              <Sliders size={20} color="var(--accent-cyan)" /> Selected Device Configuration: {phone.deviceId}
+              <Sliders size={20} color="var(--accent-cyan)" /> Selected Telephone: {phoneLabel}
             </h3>
 
-            <div className="grid-2" style={{ marginBottom: '1rem' }}>
+            <div className="grid-2" style={{ marginBottom: '1.5rem' }}>
               <div className="form-group">
-                <label className="form-label">Device Label (e.g. Living Room, Study, Kitchen)</label>
+                <label className="form-label">Telephone Name / Room Label</label>
                 <input
                   type="text"
                   className="form-input"
                   value={phoneLabel}
                   onChange={(e) => setPhoneLabel(e.target.value)}
+                  placeholder="e.g. Living Room Rotary, Office 500"
                 />
               </div>
 
@@ -645,333 +582,265 @@ export const PhoneSettingsPage: React.FC = () => {
               </div>
             </div>
 
-            <div style={{ fontSize: '0.85rem', color: 'var(--text-dim)', background: 'rgba(0,0,0,0.2)', padding: '0.75rem', borderRadius: 'var(--radius-sm)' }}>
-              💡 <strong>Party-Line Auto-Join:</strong> Picking up this phone while any other phone on your account is in a call automatically joins the conversation in real-time!
-            </div>
-          </div>
-
-          {/* Quick Hardware Sliders */}
-          <div className="glass-card">
-            <h3 style={{ fontSize: '1.15rem', marginBottom: '1.25rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-              <Volume2 size={20} color="var(--accent-cyan)" /> Handset Acoustics & Audio Levels
-            </h3>
-
-            <div className="grid-2">
+            {/* Audio Profile & Sidetone */}
+            <div className="grid-2" style={{ marginBottom: '1.5rem' }}>
               <div className="form-group">
-                <label className="form-label">
-                  <span>Earpiece Volume</span>
-                  <strong style={{ fontFamily: 'var(--font-mono)', color: 'var(--accent-cyan)' }}>{earpieceVolume}%</strong>
-                </label>
-                <input
-                  type="range"
-                  min="0"
-                  max="100"
-                  value={earpieceVolume}
-                  onChange={(e) => handleVolumeChange(parseInt(e.target.value, 10))}
-                />
-              </div>
-
-              <div className="form-group">
-                <label className="form-label">
-                  <span>Microphone Sensitivity (Mic Gain)</span>
-                  <strong style={{ fontFamily: 'var(--font-mono)', color: 'var(--accent-amber)' }}>{micSensitivity}%</strong>
-                </label>
-                <input
-                  type="range"
-                  min="0"
-                  max="100"
-                  value={micSensitivity}
-                  onChange={(e) => handleMicChange(parseInt(e.target.value, 10))}
-                />
-              </div>
-            </div>
-
-            <div className="grid-2" style={{ marginTop: '1.25rem' }}>
-              <div className="form-group">
-                <label className="form-label">
-                  <span>Acoustic Sidetone Feedback (Hear yourself in earpiece)</span>
-                  <strong style={{ fontFamily: 'var(--font-mono)', color: '#a78bfa' }}>{sidetoneLevel}%</strong>
-                </label>
-                <input
-                  type="range"
-                  min="0"
-                  max="30"
-                  value={sidetoneLevel}
-                  onChange={(e) => handleSidetoneChange(parseInt(e.target.value, 10))}
-                />
-              </div>
-
-              <div className="form-group">
-                <label className="form-label">Audio DSP Profile</label>
+                <label className="form-label">Audio DSP Filter Profile</label>
                 <select
                   className="form-select"
                   value={audioProfile}
                   onChange={(e) => setAudioProfile(e.target.value)}
                 >
-                  <option value="vintage_pots">Vintage POTS (300Hz–3.4kHz Carbon Warmth)</option>
-                  <option value="early_bell">1930s Early Bell (450Hz–2.5kHz Narrowband Lo-Fi)</option>
-                  <option value="modern_hd">Modern HD (16kHz Wideband Linear)</option>
+                  <option value="vintage_pots">Vintage POTS (300Hz - 3400Hz Bandpass)</option>
+                  <option value="early_1930s">1930s Carbon Mic (Harmonic Warmth)</option>
+                  <option value="modern_hd">Modern HD (Clean Wideband Audio)</option>
                 </select>
               </div>
-            </div>
-          </div>
 
-          {/* Physical Bell & Ring Cadence Card */}
-          <div className="glass-card">
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.25rem' }}>
-              <h3 style={{ fontSize: '1.15rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                <Bell size={20} color="var(--accent-amber)" /> Bell Ringer & Cadence
-              </h3>
-              <button
-                type="button"
-                onClick={handleTestRing}
-                disabled={ringing || !phone?.isOnline}
-                className="btn btn-secondary btn-sm"
-              >
-                <Bell size={14} /> {ringing ? 'Ringing...' : 'Test Ring Selected Phone'}
-              </button>
-            </div>
-
-            <div className="grid-2">
               <div className="form-group">
-                <label className="form-label">Default Ring Cadence Pattern</label>
+                <label className="form-label">Telephone Hardware Profile</label>
                 <select
                   className="form-select"
-                  value={ringStyle}
-                  onChange={(e) => setRingStyle(e.target.value)}
+                  value={hardwareProfile}
+                  onChange={(e) => setHardwareProfile(e.target.value)}
                 >
-                  <option value="traditional">Traditional North American (2s On, 4s Off)</option>
-                  <option value="double_ring">Double Ring (0.8s On, 0.4s Off, 0.8s On, 4s Off)</option>
-                  <option value="short_short_long">Short-Short-Long (0.4s, 0.2s, 0.4s, 0.2s, 1.2s, 3.8s)</option>
-                  <option value="custom">Custom Timing (Specified Below)</option>
+                  <option value="western_electric_500">Western Electric 500 / 2500 (US)</option>
+                  <option value="gpo_746">British GPO 746 / 706 (UK Double Bell)</option>
+                  <option value="kellogg_harmonic">Kellogg Harmonic Party Line Ringer</option>
+                  <option value="ericsson_dbb">Ericsson DBH 1001 / European</option>
                 </select>
               </div>
+            </div>
+
+            {/* Volume Sliders */}
+            <div className="grid-2" style={{ marginBottom: '1.5rem' }}>
+              <div className="form-group">
+                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.25rem' }}>
+                  <label className="form-label">Earpiece Volume ({earpieceVolume}%)</label>
+                </div>
+                <input
+                  type="range"
+                  min="20"
+                  max="100"
+                  value={earpieceVolume}
+                  onChange={(e) => setEarpieceVolume(parseInt(e.target.value, 10))}
+                  style={{ width: '100%' }}
+                />
+              </div>
 
               <div className="form-group">
-                <label className="form-label">Custom Milliseconds (On, Off)</label>
+                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.25rem' }}>
+                  <label className="form-label">Microphone Sensitivity ({micSensitivity}%)</label>
+                </div>
                 <input
-                  type="text"
-                  className="form-input"
-                  placeholder="2000,4000"
-                  disabled={ringStyle !== 'custom'}
-                  value={ringCadenceCustom}
-                  onChange={(e) => setRingCadenceCustom(e.target.value)}
-                  style={{ fontFamily: 'var(--font-mono)' }}
+                  type="range"
+                  min="20"
+                  max="100"
+                  value={micSensitivity}
+                  onChange={(e) => setMicSensitivity(parseInt(e.target.value, 10))}
+                  style={{ width: '100%' }}
                 />
               </div>
             </div>
-          </div>
 
-          {/* Firmware & Over-The-Air (OTA) Updates Card */}
-          <div className="glass-card">
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.25rem', flexWrap: 'wrap', gap: '0.75rem' }}>
-              <div>
-                <h3 style={{ fontSize: '1.15rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                  <Cpu size={20} color="var(--accent-cyan)" /> Firmware & Over-The-Air (OTA) Updates
-                </h3>
-                <p style={{ color: 'var(--text-dim)', fontSize: '0.85rem', margin: '0.25rem 0 0' }}>
-                  Release channel is synchronized automatically with server system settings.
-                </p>
+            {/* Firmware Version & Actions */}
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '1rem', paddingTop: '1rem', borderTop: '1px solid var(--border-subtle)' }}>
+              <div style={{ fontSize: '0.85rem', color: 'var(--text-dim)' }}>
+                Firmware: <strong style={{ color: '#fff', fontFamily: 'var(--font-mono)' }}>v{phone.firmwareVersion || '1.2.2'}</strong> &bull; Status: <span style={{ color: phone.isOnline ? '#34d399' : '#f43f5e', fontWeight: 600 }}>{phone.isOnline ? 'Online' : 'Offline'}</span>
               </div>
 
-              <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
-                <span className="badge badge-online" style={{ fontFamily: 'var(--font-mono)' }}>
-                  Current: v{phone?.firmwareVersion || '1.2.0'}
-                </span>
-                {firmwareInfo?.version && phone?.firmwareVersion && phone.firmwareVersion !== firmwareInfo.version && (
-                  <span className="badge badge-amber" style={{ fontFamily: 'var(--font-mono)', background: 'rgba(245, 158, 11, 0.2)', color: '#fbbf24', border: '1px solid rgba(245, 158, 11, 0.4)' }}>
-                    v{firmwareInfo.version} Available
-                  </span>
-                )}
-              </div>
-            </div>
-
-            {/* Pending Update Alert & Trigger */}
-            {firmwareInfo?.version && phone?.firmwareVersion && phone.firmwareVersion !== firmwareInfo.version && (
-              <div style={{ background: 'rgba(245, 158, 11, 0.12)', border: '1px solid rgba(245, 158, 11, 0.3)', padding: '1rem', borderRadius: 'var(--radius-sm)', marginBottom: '1.25rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.75rem' }}>
-                <div>
-                  <strong style={{ color: '#fbbf24', display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
-                    <Sparkles size={16} /> Pending Firmware Update Available (v{firmwareInfo.version})
-                  </strong>
-                  <p style={{ color: 'var(--text-main)', fontSize: '0.85rem', margin: '0.25rem 0 0' }}>
-                    A new firmware release is ready on the switchboard. You can update now or wait for the automatic scheduled time.
-                  </p>
-                </div>
-                <button
-                  type="button"
-                  onClick={handleManualOtaUpdate}
-                  disabled={updatingOta || !phone?.isOnline}
-                  className="btn btn-amber btn-sm"
-                >
-                  <Zap size={14} /> {updatingOta ? 'Flashing...' : 'Update Firmware Now (OTA)'}
+              <div style={{ display: 'flex', gap: '0.5rem' }}>
+                <button type="button" onClick={handleTestRing} disabled={ringing || !phone.isOnline} className="btn btn-amber btn-sm">
+                  <Bell size={14} /> {ringing ? 'Ringing...' : 'Test Bell'}
+                </button>
+                <button type="button" onClick={handleReboot} disabled={!phone.isOnline} className="btn btn-secondary btn-sm">
+                  <RotateCcw size={14} /> Reboot
+                </button>
+                <button type="button" onClick={handleUnclaim} className="btn btn-danger btn-sm">
+                  <Trash2 size={14} /> Unpair Phone
                 </button>
               </div>
-            )}
-
-            <div className="grid-2" style={{ marginBottom: '1.25rem' }}>
-              <div className="form-group" style={{ display: 'flex', alignItems: 'center', marginTop: '0.5rem' }}>
-                <label style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', cursor: 'pointer' }}>
-                  <input
-                    type="checkbox"
-                    checked={otaAutoUpdateEnabled}
-                    onChange={(e) => setOtaAutoUpdateEnabled(e.target.checked)}
-                    style={{ width: '18px', height: '18px', accentColor: 'var(--accent-cyan)' }}
-                  />
-                  <div>
-                    <strong style={{ color: '#fff' }}>Enable Automatic Firmware Updates (OTA)</strong>
-                    <p style={{ color: 'var(--text-dim)', fontSize: '0.8rem', margin: 0 }}>
-                      Automatically flashes new firmware releases when the phone is on-hook (idle).
-                    </p>
-                  </div>
-                </label>
-              </div>
-
-              <div className="form-group">
-                <label className="form-label">Preferred Auto-Update Time Window</label>
-                <input
-                  type="time"
-                  className="form-input"
-                  value={otaUpdateTime}
-                  onChange={(e) => setOtaUpdateTime(e.target.value)}
-                />
-              </div>
-            </div>
-
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '1rem', paddingTop: '0.75rem', borderTop: '1px solid var(--border-subtle)' }}>
-              <div style={{ fontSize: '0.8rem', color: 'var(--text-dim)' }}>
-                IP: <strong style={{ color: '#fff', fontFamily: 'var(--font-mono)' }}>{phone?.ipAddress || '192.168.x.x'}</strong> &bull; Device: <span style={{ fontFamily: 'var(--font-mono)' }}>{phone?.deviceId}</span>
-              </div>
-
-              <a
-                href="https://github.com/TylerHats/DecaTone/wiki/Firmware-Flashing-and-Setup"
-                target="_blank"
-                rel="noopener noreferrer"
-                style={{ color: 'var(--accent-cyan)', fontSize: '0.8rem', display: 'flex', alignItems: 'center', gap: '0.35rem', textDecoration: 'none' }}
-              >
-                <HelpCircle size={14} /> Firmware & Flashing Wiki Guide <ExternalLink size={12} />
-              </a>
             </div>
           </div>
 
-          {/* Save & Device Actions */}
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '1rem' }}>
-            <div style={{ display: 'flex', gap: '0.5rem' }}>
-              <button
-                type="button"
-                onClick={handleReboot}
-                disabled={!phone?.isOnline}
-                className="btn btn-secondary btn-sm"
-              >
-                <RotateCcw size={14} /> Remote Reboot
-              </button>
-              <button
-                type="button"
-                onClick={handleUnclaim}
-                className="btn btn-danger btn-sm"
-              >
-                <Trash2 size={14} /> Unpair Phone
-              </button>
-            </div>
-
-            <button
-              type="button"
-              onClick={handleSaveSettings}
-              disabled={saving}
-              className="btn btn-primary"
-              style={{ minWidth: '160px' }}
-            >
-              <Check size={16} /> {saving ? 'Saving...' : 'Save Phone Settings'}
+          <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+            <button type="button" onClick={handleSaveSettings} disabled={saving} className="btn btn-primary btn-lg">
+              <Check size={18} /> {saving ? 'Saving...' : 'Save Telephone Settings'}
             </button>
           </div>
         </div>
       )}
 
       {/* ========================================================================= */}
-      {/* 2. RESONANCE CALIBRATION WIZARD TAB */}
+      {/* 2. BELL RESONANCE TUNING & ACOUSTIC SWEEP WIZARD */}
       {/* ========================================================================= */}
       {activeTab === 'resonance' && phone && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
-          <div className="glass-card highlight-amber">
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '0.75rem', marginBottom: '0.5rem' }}>
-              <h3 style={{ fontSize: '1.25rem', color: '#fbbf24', display: 'flex', alignItems: 'center', gap: '0.5rem', margin: 0 }}>
-                <Zap size={22} /> Bell Resonance Frequency Calibration Sweep
-              </h3>
+          {/* Automated Calibration Wizard Card */}
+          <div className="glass-card highlight-amber" style={{ padding: '1.75rem' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '1rem', marginBottom: '1rem' }}>
+              <div>
+                <h3 style={{ fontSize: '1.3rem', color: '#fbbf24', display: 'flex', alignItems: 'center', gap: '0.5rem', margin: 0 }}>
+                  <Zap size={22} /> Automated Acoustic Resonance Calibration Wizard
+                </h3>
+                <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem', marginTop: '0.25rem' }}>
+                  The switchboard will ring your telephone across 15Hz – 35Hz, measure acoustic microphone energy, and automatically tune your bell driver to maximum loudness.
+                </p>
+              </div>
+
               <a
                 href="https://github.com/TylerHats/DecaTone/wiki/Audio-and-Bell-Ringer-Tuning"
                 target="_blank"
                 rel="noopener noreferrer"
                 style={{ color: 'var(--accent-amber)', fontSize: '0.8rem', display: 'flex', alignItems: 'center', gap: '0.35rem', textDecoration: 'none' }}
               >
-                <HelpCircle size={14} /> Bell Ringer Tuning Wiki <ExternalLink size={12} />
+                <HelpCircle size={14} /> Bell Tuning Wiki <ExternalLink size={12} />
               </a>
             </div>
-            <p style={{ color: 'var(--text-muted)', fontSize: '0.875rem', lineHeight: 1.5, marginBottom: '1.5rem' }}>
-              Targeting: <strong>{phoneLabel} ({phone.deviceId})</strong>. Test the presets below or sweep frequencies to find maximum resonance for your phone's mechanical bells.
-            </p>
 
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '1rem', marginBottom: '1.5rem' }}>
-              {[
-                { freq: 20.0, label: '20.0 Hz (US Standard)', desc: 'Western Electric 500/2500 C4A Ringer' },
-                { freq: 16.6, label: '16.6 Hz (Party Line)', desc: 'Antique rural & multi-party line bells' },
-                { freq: 25.0, label: '25.0 Hz (UK / GPO)', desc: 'British GPO 746 / European double bells' },
-                { freq: 30.0, label: '30.0 Hz (Kellogg High)', desc: 'Kellogg / Stromberg harmonic ringers' },
-                { freq: 33.3, label: '33.3 Hz (Kellogg Mid)', desc: 'Harmonic frequency party ringers' }
-              ].map(preset => (
-                <div
-                  key={preset.freq}
-                  style={{
-                    background: sweepFreq === preset.freq ? 'rgba(245, 158, 11, 0.15)' : 'rgba(255, 255, 255, 0.03)',
-                    border: `1px solid ${sweepFreq === preset.freq ? 'var(--accent-amber)' : 'var(--border-subtle)'}`,
-                    borderRadius: 'var(--radius-sm)',
-                    padding: '1rem',
-                    display: 'flex',
-                    flexDirection: 'column',
-                    justifyContent: 'space-between',
-                    gap: '0.75rem'
-                  }}
-                >
-                  <div>
-                    <strong style={{ color: '#fff', fontSize: '1rem' }}>{preset.label}</strong>
-                    <p style={{ color: 'var(--text-dim)', fontSize: '0.8rem', marginTop: '0.25rem' }}>{preset.desc}</p>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => handleSweepTest(preset.freq)}
-                    disabled={sweepActive || !phone?.isOnline}
-                    className="btn btn-secondary btn-sm"
-                  >
-                    <Bell size={13} /> {sweepActive && sweepFreq === preset.freq ? 'Testing Ring...' : 'Test Frequency'}
-                  </button>
-                </div>
-              ))}
+            {/* Critical Volume Notice */}
+            <div style={{ background: 'rgba(245, 158, 11, 0.15)', border: '1px solid rgba(245, 158, 11, 0.4)', borderRadius: 'var(--radius-sm)', padding: '1rem', marginBottom: '1.5rem', display: 'flex', alignItems: 'flex-start', gap: '0.75rem' }}>
+              <AlertCircle size={22} color="#fbbf24" style={{ flexShrink: 0, marginTop: '2px' }} />
+              <div style={{ fontSize: '0.9rem', color: '#fef08a' }}>
+                <strong>Important Before Running:</strong> Ensure the physical mechanical bell loudness lever on the bottom of your telephone body is set to <strong>MAXIMUM (LOUD)</strong>. Place the handset microphone directly next to the metal bells.
+              </div>
             </div>
 
-            {/* Custom Sweep Frequency Slider */}
+            {/* Wizard Progress / Action */}
+            {wizardRunning ? (
+              <div style={{ textAlign: 'center', padding: '1.5rem 0' }}>
+                <div style={{ fontSize: '1.2rem', color: '#fbbf24', fontWeight: 700, marginBottom: '0.5rem', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.5rem' }}>
+                  <Zap size={20} className="spin" />
+                  Calibrating Bell Resonance: {wizardProgress?.freq?.toFixed(1) || '20.0'} Hz ({wizardProgress?.percent || 0}%)
+                </div>
+                <div style={{ width: '100%', height: '8px', background: 'rgba(0,0,0,0.5)', borderRadius: '4px', overflow: 'hidden', maxWidth: '400px', margin: '0 auto' }}>
+                  <div style={{ width: `${wizardProgress?.percent || 0}%`, height: '100%', background: 'var(--accent-amber)', transition: 'width 0.3s ease' }} />
+                </div>
+                <p style={{ color: 'var(--text-dim)', fontSize: '0.85rem', marginTop: '0.75rem' }}>
+                  Listening to microphone acoustic feedback pulses...
+                </p>
+              </div>
+            ) : wizardResult ? (
+              <div style={{ background: 'rgba(16, 185, 129, 0.12)', border: '1px solid rgba(16, 185, 129, 0.3)', borderRadius: 'var(--radius-sm)', padding: '1.25rem', marginBottom: '1rem' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', color: '#34d399', fontSize: '1.1rem', fontWeight: 700, marginBottom: '0.5rem' }}>
+                  <CheckCircle2 size={20} /> Calibration Successful! Optimal Peak Resonance: {wizardResult.peakFrequency} Hz
+                </div>
+                <p style={{ color: 'var(--text-main)', fontSize: '0.875rem', margin: 0 }}>
+                  Optimal resonant frequency has been saved and applied to your telephone ringer driver.
+                </p>
+              </div>
+            ) : null}
+
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.75rem' }}>
+              <button
+                type="button"
+                onClick={handleRunResonanceWizard}
+                disabled={wizardRunning || !phone.isOnline}
+                className="btn btn-amber btn-lg"
+                style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}
+              >
+                <Zap size={18} /> {wizardRunning ? 'Running Sweep...' : 'Start Acoustic Calibration Wizard'}
+              </button>
+            </div>
+          </div>
+
+          {/* Preset Badges (Directly Clickable) */}
+          <div className="glass-card">
+            <h4 style={{ fontSize: '1.1rem', marginBottom: '0.5rem', color: '#fff' }}>
+              Manual Resonance Presets & Frequency Slider
+            </h4>
+            <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem', marginBottom: '1.25rem' }}>
+              Click any standard preset below to instantly apply and test it, or fine-tune using the slider.
+            </p>
+
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '1rem', marginBottom: '1.5rem' }}>
+              {[
+                { freq: 20.0, label: '20.0 Hz (US Standard)', desc: 'Western Electric 500 / 2500 C4A' },
+                { freq: 16.6, label: '16.6 Hz (Party Line)', desc: 'Rural & harmonic party bells' },
+                { freq: 25.0, label: '25.0 Hz (UK / GPO)', desc: 'British GPO 746 double bells' },
+                { freq: 30.0, label: '30.0 Hz (Kellogg High)', desc: 'Harmonic frequency ringers' },
+                { freq: 33.3, label: '33.3 Hz (Harmonic Mid)', desc: 'Harmonic tuned bells' }
+              ].map(preset => {
+                const isSelected = bellFrequencyHz === preset.freq;
+                return (
+                  <div
+                    key={preset.freq}
+                    onClick={() => {
+                      setBellFrequencyHz(preset.freq);
+                      setSweepFreq(preset.freq);
+                    }}
+                    style={{
+                      background: isSelected ? 'rgba(245, 158, 11, 0.18)' : 'rgba(255, 255, 255, 0.03)',
+                      border: `2px solid ${isSelected ? 'var(--accent-amber)' : 'var(--border-subtle)'}`,
+                      borderRadius: 'var(--radius-sm)',
+                      padding: '1rem',
+                      cursor: 'pointer',
+                      display: 'flex',
+                      flexDirection: 'column',
+                      justifyContent: 'space-between',
+                      gap: '0.75rem',
+                      transition: 'all 0.2s ease'
+                    }}
+                  >
+                    <div>
+                      <strong style={{ color: isSelected ? '#fbbf24' : '#fff', fontSize: '0.95rem' }}>{preset.label}</strong>
+                      <p style={{ color: 'var(--text-dim)', fontSize: '0.75rem', marginTop: '0.25rem' }}>{preset.desc}</p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleSweepTest(preset.freq);
+                      }}
+                      disabled={sweepActive || !phone?.isOnline}
+                      className={`btn btn-sm ${isSelected ? 'btn-amber' : 'btn-secondary'}`}
+                    >
+                      <Bell size={13} /> {sweepActive && sweepFreq === preset.freq ? 'Testing...' : 'Test Ring'}
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
+
+            {/* Custom Resonance Slider */}
             <div style={{ background: 'rgba(0,0,0,0.3)', border: '1px solid var(--border-subtle)', borderRadius: 'var(--radius-sm)', padding: '1.25rem' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem' }}>
-                <span style={{ fontWeight: '600', color: '#fff' }}>Custom Resonance Frequency (16.0 Hz – 35.0 Hz)</span>
-                <span style={{ fontFamily: 'var(--font-mono)', fontSize: '1.25rem', color: 'var(--accent-amber)', fontWeight: '700' }}>
-                  {sweepFreq.toFixed(1)} Hz
+                <span style={{ fontWeight: '600', color: '#fff' }}>Fine-Tuning Frequency Slider (15.0 Hz – 35.0 Hz)</span>
+                <span style={{ fontFamily: 'var(--font-mono)', fontSize: '1.3rem', color: 'var(--accent-amber)', fontWeight: '700' }}>
+                  {bellFrequencyHz.toFixed(1)} Hz
                 </span>
               </div>
               <input
                 type="range"
-                min="16"
+                min="15"
                 max="35"
                 step="0.5"
-                value={sweepFreq}
-                onChange={(e) => setSweepFreq(parseFloat(e.target.value))}
+                value={bellFrequencyHz}
+                onChange={(e) => {
+                  const val = parseFloat(e.target.value);
+                  setBellFrequencyHz(val);
+                  setSweepFreq(val);
+                }}
                 style={{ width: '100%', marginBottom: '1rem' }}
               />
-              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.75rem' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                 <button
                   type="button"
-                  onClick={() => handleSweepTest(sweepFreq)}
+                  onClick={() => handleSweepTest(bellFrequencyHz)}
                   disabled={sweepActive || !phone?.isOnline}
-                  className="btn btn-primary btn-sm"
+                  className="btn btn-secondary btn-sm"
                 >
                   <Bell size={14} /> {sweepActive ? 'Testing Bell...' : 'Test Selected Frequency (3s)'}
                 </button>
+
+                <button
+                  type="button"
+                  onClick={handleSaveSettings}
+                  disabled={saving}
+                  className="btn btn-primary btn-sm"
+                >
+                  <Check size={14} /> Save Resonance Setting
+                </button>
               </div>
             </div>
           </div>
@@ -979,206 +848,181 @@ export const PhoneSettingsPage: React.FC = () => {
       )}
 
       {/* ========================================================================= */}
-      {/* 3. DIAL CODES & SERVICE DIRECTORY TAB */}
+      {/* 3. HARDWARE DIAGNOSTICS & TELEMETRY TAB */}
       {/* ========================================================================= */}
-      {activeTab === 'services' && (
+      {activeTab === 'diagnostics' && phone && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
-          <div className="glass-card">
-            <h3 style={{ fontSize: '1.25rem', marginBottom: '0.5rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-              <HelpCircle size={22} color="var(--accent-cyan)" /> Telephony Dial Codes & Service Lines
-            </h3>
-            <p style={{ color: 'var(--text-muted)', fontSize: '0.875rem', marginBottom: '1.5rem' }}>
-              DecaTone provides authentic 3-digit service lines and single-digit in-call controls.
-            </p>
-
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: '1rem' }}>
-              {[
-                { code: '111', title: 'Ringback Line Test', desc: 'Dial 111, hang up the handset, and the switchboard rings your bells 5 seconds later to test ringer mechanical operation.' },
-                { code: '119 / 099', title: 'Audio Echo & Sidetone Loopback', desc: 'Speaks back your microphone audio in real-time with 350ms delay for acoustic calibration.' },
-                { code: '411', title: 'Speaking Clock Service', desc: 'Announces official local system time with 1000Hz synchronization tone pip.' },
-                { code: '567 / 300', title: 'Dial-Up Modem Handshake Simulator', desc: 'Plays authentic Bell 103 / V.34 dial-up modem screeching, carrier tones, and digital data transmission sounds.' },
-                { code: '711', title: 'Automated Weather Hotline', desc: 'Reads out live local meteorological weather conditions and temperature forecast.' },
-                { code: '069', title: 'Last Call Return (Redial)', desc: 'Automatically dials back the last person who called your telephone.' },
-                { code: '078', title: 'Toggle Do Not Disturb', desc: 'Toggles DND on/off from the handset with spoken voice confirmation.' },
-                { code: '079', title: 'Do Not Disturb Status', desc: 'Speaks whether DND is currently active or off for your line.' },
-                { code: '0', title: 'Voicemail Inbox', desc: 'Dial 0 and pause 2s to listen to and manage your encrypted voice messages.' },
-                { code: '8 (In Call)', title: 'Call Park / Hold', desc: 'Dial 8 during an active call to park it on hold with melodic music. You can hang up and pick up from any room to resume.' },
-                { code: '2 (In Call)', title: 'Mute / Unmute Microphone', desc: 'Toggles handset mic on/off with in-ear audio chirp confirmation.' },
-                { code: '3 + Ext (In Call)', title: 'Multi-Party Conference Invite', desc: 'Invite another friend into your active call (up to 5 callers).' },
-                { code: '1 (Screening)', title: 'Live Voicemail Intercept', desc: 'When screening someone leaving a voicemail, dial 1 to take the call live immediately.' },
-                { code: '0 / 1 (Call Waiting)', title: 'Call Waiting Controls', desc: 'When call waiting tone beeps: dial 0 to reject to VM, or 1 to accept & swap.' }
-              ].map(svc => (
-                <div
-                  key={svc.code}
-                  style={{
-                    background: 'rgba(255, 255, 255, 0.03)',
-                    border: '1px solid var(--border-subtle)',
-                    borderRadius: 'var(--radius-sm)',
-                    padding: '1rem'
-                  }}
-                >
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
-                    <strong style={{ color: '#fff', fontSize: '0.95rem' }}>{svc.title}</strong>
-                    <code style={{ fontFamily: 'var(--font-mono)', background: 'rgba(56, 189, 248, 0.15)', color: '#38bdf8', padding: '2px 6px', borderRadius: '4px', fontWeight: '700' }}>
-                      {svc.code}
-                    </code>
-                  </div>
-                  <p style={{ color: 'var(--text-dim)', fontSize: '0.8rem', lineHeight: 1.4 }}>{svc.desc}</p>
-                </div>
-              ))}
+          <div className="glass-card highlight-cyan">
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.25rem' }}>
+              <h3 style={{ fontSize: '1.25rem', display: 'flex', alignItems: 'center', gap: '0.5rem', margin: 0 }}>
+                <Activity size={22} color="var(--accent-cyan)" /> Live Hardware Diagnostics & Board Telemetry
+              </h3>
+              <button onClick={fetchDiagnostics} disabled={loadingDiagnostics} className="btn btn-secondary btn-sm">
+                <RotateCcw size={14} /> Refresh Metrics
+              </button>
             </div>
+
+            {diagnosticsData ? (
+              <div className="grid-2" style={{ gap: '1rem' }}>
+                <div style={{ background: 'rgba(0,0,0,0.3)', padding: '1rem', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-subtle)' }}>
+                  <span style={{ fontSize: '0.8rem', color: 'var(--text-dim)', textTransform: 'uppercase' }}>Rotary Governor Health</span>
+                  <div style={{ fontSize: '1.1rem', fontWeight: 700, color: '#34d399', marginTop: '0.25rem' }}>
+                    {diagnosticsData.rotaryGovernorSpeed}
+                  </div>
+                  <p style={{ color: 'var(--text-muted)', fontSize: '0.8rem', margin: '0.25rem 0 0' }}>
+                    Pulse Break Ratio: {diagnosticsData.rotaryBreakRatio}
+                  </p>
+                </div>
+
+                <div style={{ background: 'rgba(0,0,0,0.3)', padding: '1rem', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-subtle)' }}>
+                  <span style={{ fontSize: '0.8rem', color: 'var(--text-dim)', textTransform: 'uppercase' }}>WiFi Signal Strength (RSSI)</span>
+                  <div style={{ fontSize: '1.1rem', fontWeight: 700, color: '#38bdf8', marginTop: '0.25rem' }}>
+                    {diagnosticsData.rssi} dBm ({diagnosticsData.wifiQualityPercent}%)
+                  </div>
+                  <p style={{ color: 'var(--text-muted)', fontSize: '0.8rem', margin: '0.25rem 0 0' }}>
+                    IP Address: {diagnosticsData.ipAddress}
+                  </p>
+                </div>
+
+                <div style={{ background: 'rgba(0,0,0,0.3)', padding: '1rem', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-subtle)' }}>
+                  <span style={{ fontSize: '0.8rem', color: 'var(--text-dim)', textTransform: 'uppercase' }}>Audio Circuit Health</span>
+                  <div style={{ fontSize: '1.1rem', fontWeight: 700, color: '#fff', marginTop: '0.25rem' }}>
+                    {diagnosticsData.audioNoiseFloor}
+                  </div>
+                  <p style={{ color: 'var(--text-muted)', fontSize: '0.8rem', margin: '0.25rem 0 0' }}>
+                    Microphone Gain: {diagnosticsData.adcMicGain} &bull; Output Level: {diagnosticsData.dacOutputLevel}
+                  </p>
+                </div>
+
+                <div style={{ background: 'rgba(0,0,0,0.3)', padding: '1rem', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-subtle)' }}>
+                  <span style={{ fontSize: '0.8rem', color: 'var(--text-dim)', textTransform: 'uppercase' }}>Bell Ringer Circuit</span>
+                  <div style={{ fontSize: '1.1rem', fontWeight: 700, color: 'var(--accent-amber)', marginTop: '0.25rem' }}>
+                    {diagnosticsData.bellFrequencyHz.toFixed(1)} Hz Coil Tuning
+                  </div>
+                  <p style={{ color: 'var(--text-muted)', fontSize: '0.8rem', margin: '0.25rem 0 0' }}>
+                    Driver: Solid-State MOSFET H-Bridge
+                  </p>
+                </div>
+              </div>
+            ) : (
+              <div style={{ textAlign: 'center', padding: '2rem 0', color: 'var(--text-muted)' }}>
+                {loadingDiagnostics ? 'Fetching telemetry from telephone...' : 'No diagnostics received yet'}
+              </div>
+            )}
           </div>
         </div>
       )}
 
       {/* ========================================================================= */}
-      {/* 4. DO NOT DISTURB & ACCOUNT TAB */}
+      {/* 4. ACCOUNT PREFERENCES & DO NOT DISTURB */}
       {/* ========================================================================= */}
       {activeTab === 'account' && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
-          <div className="glass-card highlight-cyan">
-            <h3 style={{ fontSize: '1.15rem', marginBottom: '0.5rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-              <Moon size={20} color="var(--accent-cyan)" /> Do Not Disturb (DND) & Scheduled Quiet Hours
-            </h3>
-            <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem', marginBottom: '1.25rem' }}>
-              Silence incoming bell ringing automatically during sleep hours or on-demand.
-            </p>
-
-            <form onSubmit={handleSaveAccount}>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
-                <label style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', cursor: 'pointer' }}>
-                  <input
-                    type="checkbox"
-                    checked={dndManualState}
-                    onChange={(e) => setDndManualState(e.target.checked)}
-                    style={{ width: '18px', height: '18px', accentColor: 'var(--accent-cyan)' }}
-                  />
-                  <div>
-                    <strong style={{ color: '#fff' }}>Enable Do Not Disturb Now (Manual Mode)</strong>
-                    <p style={{ color: 'var(--text-dim)', fontSize: '0.8rem' }}>Directs all non-VIP calls straight to voicemail.</p>
-                  </div>
-                </label>
-
-                <div style={{ borderTop: '1px solid var(--border-subtle)', paddingTop: '1.25rem' }}>
-                  <label style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', cursor: 'pointer', marginBottom: '1rem' }}>
-                    <input
-                      type="checkbox"
-                      checked={dndScheduleEnabled}
-                      onChange={(e) => setDndScheduleEnabled(e.target.checked)}
-                      style={{ width: '18px', height: '18px', accentColor: 'var(--accent-cyan)' }}
-                    />
-                    <div>
-                      <strong style={{ color: '#fff' }}>Enable Scheduled Quiet Hours</strong>
-                      <p style={{ color: 'var(--text-dim)', fontSize: '0.8rem' }}>Automatically silences bells during specific times of day.</p>
-                    </div>
-                  </label>
-
-                  {dndScheduleEnabled && (
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem', paddingLeft: '2rem' }}>
-                      <div className="grid-2">
-                        <div className="form-group">
-                          <label className="form-label">Start Time</label>
-                          <input
-                            type="time"
-                            className="form-input"
-                            value={dndScheduleStart}
-                            onChange={(e) => setDndScheduleStart(e.target.value)}
-                          />
-                        </div>
-                        <div className="form-group">
-                          <label className="form-label">End Time</label>
-                          <input
-                            type="time"
-                            className="form-input"
-                            value={dndScheduleEnd}
-                            onChange={(e) => setDndScheduleEnd(e.target.value)}
-                          />
-                        </div>
-                      </div>
-                    </div>
-                  )}
-                </div>
-
-                <div style={{ borderTop: '1px solid var(--border-subtle)', paddingTop: '1.25rem' }}>
-                  <label style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', cursor: 'pointer' }}>
-                    <input
-                      type="checkbox"
-                      checked={dndRepeatedCallBreakthrough}
-                      onChange={(e) => setDndRepeatedCallBreakthrough(e.target.checked)}
-                      style={{ width: '18px', height: '18px', accentColor: 'var(--accent-cyan)' }}
-                    />
-                    <div>
-                      <strong style={{ color: '#fff' }}>Allow Repeated Call Breakthrough (Urgent Calls)</strong>
-                      <p style={{ color: 'var(--text-dim)', fontSize: '0.8rem' }}>
-                        If the same non-VIP caller rings twice within 3 minutes, ring through DND.
-                      </p>
-                    </div>
-                  </label>
-                </div>
-
-                <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '1rem' }}>
-                  <button type="submit" disabled={savingAccount} className="btn btn-primary">
-                    <Check size={16} /> {savingAccount ? 'Saving...' : 'Save DND Preferences'}
-                  </button>
-                </div>
-              </div>
-            </form>
-          </div>
-
-          {/* Voicemail Greeting Card */}
           <div className="glass-card">
-            <h3 style={{ fontSize: '1.15rem', marginBottom: '0.5rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-              <PhoneForwarded size={20} color="var(--accent-cyan)" /> Outbound Voicemail Greeting
+            <h3 style={{ fontSize: '1.25rem', marginBottom: '1rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+              <Moon size={20} color="var(--accent-cyan)" /> Do Not Disturb (DND) & Privacy
             </h3>
-            <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem', marginBottom: '1.25rem' }}>
-              Upload a personalized greeting or use the built-in system announcement.
-            </p>
 
-            <form onSubmit={handleUploadGreeting} style={{ display: 'flex', gap: '0.75rem', alignItems: 'center', flexWrap: 'wrap' }}>
-              <input
-                type="file"
-                accept="audio/*"
-                onChange={(e) => setGreetingFile(e.target.files?.[0] || null)}
-                className="form-input"
-                style={{ flex: 1, minWidth: '220px' }}
-              />
-              <button type="submit" disabled={!greetingFile || uploadingGreeting} className="btn btn-primary">
-                <Upload size={16} /> {uploadingGreeting ? 'Uploading...' : 'Upload Greeting'}
+            <div className="form-group" style={{ marginBottom: '1.5rem' }}>
+              <label className="form-label">Incoming Call Privacy</label>
+              <select
+                className="form-select"
+                value={callPrivacy}
+                onChange={(e) => setCallPrivacy(e.target.value)}
+              >
+                <option value="open">Open (Anyone can call your extension)</option>
+                <option value="friends_only">Friends & VIP Only (Unknown callers go to Voicemail)</option>
+                <option value="closed">Closed (Reject all incoming calls)</option>
+              </select>
+            </div>
+
+            <div className="form-group" style={{ marginBottom: '1.5rem' }}>
+              <label style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', cursor: 'pointer' }}>
+                <input
+                  type="checkbox"
+                  checked={dndManualState}
+                  onChange={(e) => setDndManualState(e.target.checked)}
+                  style={{ width: '20px', height: '20px', accentColor: 'var(--accent-cyan)' }}
+                />
+                <div>
+                  <strong style={{ color: '#fff' }}>Enable Do Not Disturb Right Now</strong>
+                  <p style={{ color: 'var(--text-dim)', fontSize: '0.8rem', margin: 0 }}>
+                    Directs incoming calls straight to your voicemail box.
+                  </p>
+                </div>
+              </label>
+            </div>
+
+            <div className="form-group" style={{ marginBottom: '1.5rem' }}>
+              <label style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', cursor: 'pointer' }}>
+                <input
+                  type="checkbox"
+                  checked={dndRepeatedCallBreakthrough}
+                  onChange={(e) => setDndRepeatedCallBreakthrough(e.target.checked)}
+                  style={{ width: '20px', height: '20px', accentColor: 'var(--accent-cyan)' }}
+                />
+                <div>
+                  <strong style={{ color: '#fff' }}>Repeated Call Breakthrough</strong>
+                  <p style={{ color: 'var(--text-dim)', fontSize: '0.8rem', margin: 0 }}>
+                    Allow a caller who rings twice within 3 minutes to ring through DND for emergencies.
+                  </p>
+                </div>
+              </label>
+            </div>
+
+            <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+              <button
+                type="button"
+                onClick={handleSaveAccountPreferences}
+                disabled={savingAccount}
+                className="btn btn-primary"
+              >
+                <Check size={16} /> {savingAccount ? 'Saving...' : 'Save Account Preferences'}
               </button>
-              {greetingInfo?.hasCustomGreeting && (
-                <button type="button" onClick={handleResetGreeting} className="btn btn-secondary">
-                  <RotateCcw size={16} /> Reset Default
-                </button>
-              )}
-            </form>
+            </div>
           </div>
         </div>
       )}
 
-      {/* Floating In-Browser Softphone Button */}
-      <div style={{ position: 'fixed', bottom: '2rem', right: '2rem', zIndex: 90 }}>
-        <button
-          type="button"
-          onClick={() => setShowWebPhone(true)}
-          className="btn btn-primary"
-          style={{
-            borderRadius: '50px',
-            padding: '0.85rem 1.4rem',
-            boxShadow: '0 8px 24px rgba(56, 189, 248, 0.35)',
-            display: 'flex',
-            alignItems: 'center',
-            gap: '0.5rem',
-            fontWeight: 700
-          }}
-        >
-          <PhoneCall size={18} /> Open In-Browser Softphone
-        </button>
-      </div>
+      {/* ========================================================================= */}
+      {/* 5. SERVICE DIRECTORY TAB */}
+      {/* ========================================================================= */}
+      {activeTab === 'services' && (
+        <div className="glass-card">
+          <h3 style={{ fontSize: '1.25rem', marginBottom: '0.5rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+            <HelpCircle size={22} color="var(--accent-cyan)" /> Telephony Dial Codes & Service Lines
+          </h3>
+          <p style={{ color: 'var(--text-muted)', fontSize: '0.875rem', marginBottom: '1.5rem' }}>
+            DecaTone provides authentic 3-digit service lines and in-call controls.
+          </p>
 
-      <WebPhoneModal
-        isOpen={showWebPhone}
-        onClose={() => setShowWebPhone(false)}
-      />
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: '1rem' }}>
+            {[
+              { code: '111', title: 'Ringback Line Test', desc: 'Dial 111, hang up the handset, and the switchboard rings your bells 5 seconds later to test mechanical operation.' },
+              { code: '119 / 099', title: 'Audio Echo Loopback', desc: 'Speaks back your microphone audio in real-time with 350ms delay for acoustic calibration.' },
+              { code: '411', title: 'Speaking Clock Service', desc: 'Announces official local system time with 1000Hz synchronization tone pip.' },
+              { code: '567 / 300', title: 'Dial-Up Modem Simulator', desc: 'Plays authentic Bell 103 / V.34 dial-up modem screeching, carrier tones, and digital data sounds.' },
+              { code: '711', title: 'Automated Weather Hotline', desc: 'Reads out live local meteorological weather conditions and forecast.' },
+              { code: '0', title: 'Voicemail Inbox', desc: 'Dial 0 and pause 2 seconds to listen to and manage your encrypted voice messages.' }
+            ].map(s => (
+              <div key={s.code} style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid var(--border-subtle)', borderRadius: 'var(--radius-sm)', padding: '1.25rem' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
+                  <strong style={{ color: '#fff', fontSize: '1.05rem' }}>{s.title}</strong>
+                  <span className="badge badge-cyan" style={{ fontFamily: 'var(--font-mono)', fontSize: '0.9rem' }}>
+                    {s.code}
+                  </span>
+                </div>
+                <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem', lineHeight: 1.5, margin: 0 }}>
+                  {s.desc}
+                </p>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Web Softphone Modal */}
+      <WebPhoneModal isOpen={showWebPhone} onClose={() => setShowWebPhone(false)} />
     </div>
   );
 };

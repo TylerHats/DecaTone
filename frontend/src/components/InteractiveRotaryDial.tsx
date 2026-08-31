@@ -11,15 +11,14 @@ interface DigitConfig {
   digit: string;
   letters: string;
   index: number;
-  windUpAngle: number; // clockwise degrees from rest to reach the finger stop
-  restAngleDeg: number; // fixed rest position on dial
+  windUpAngle: number; // Clockwise degrees to reach the metal stop at ~85 deg
+  restAngleDeg: number; // Fixed rest position on dial
 }
 
-// Finger stop stationary position (lower-right, ~4:30 clock position)
-const FINGER_STOP_ANGLE_DEG = 140;
+// Finger stop stationary position (directly on right side, ~85 deg / 3:45 - 4:00 clock position)
+const FINGER_STOP_ANGLE_DEG = 85;
 
 // Digits 1 through 0 in authentic counter-clockwise order:
-// '1' is at ~55 deg (top-right), followed counter-clockwise by 2, 3, 4, 5, 6, 7, 8, 9, 0
 const DIGIT_ORDER = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '0'];
 const LETTER_MAP: Record<string, string> = {
   '1': '',
@@ -35,9 +34,9 @@ const LETTER_MAP: Record<string, string> = {
 };
 
 const DIGIT_CONFIGS: DigitConfig[] = DIGIT_ORDER.map((digit, idx) => {
-  // '1' requires ~85 deg rotation to hit the stop at 140 deg.
-  // Each subsequent digit requires an additional ~24 deg rotation.
-  const windUpAngle = 85 + idx * 24;
+  // '1' requires ~40 deg rotation to hit the stop at 85 deg.
+  // Each subsequent digit requires an additional ~30 deg of clockwise rotation.
+  const windUpAngle = 40 + idx * 30;
   // Rest position is counter-clockwise from the finger stop:
   const restAngleDeg = (FINGER_STOP_ANGLE_DEG - windUpAngle + 720) % 360;
   return {
@@ -60,14 +59,14 @@ export const InteractiveRotaryDial: React.FC<InteractiveRotaryDialProps> = ({
   const [activeDragDigit, setActiveDragDigit] = useState<DigitConfig | null>(null);
   const [pulsesCounted, setPulsesCounted] = useState(0);
   const [totalPulsesForDigit, setTotalPulsesForDigit] = useState(0);
-  const [instructionHint, setInstructionHint] = useState('Drag any finger hole clockwise to the metal stop and release');
+  const [instructionHint, setInstructionHint] = useState('Drag any finger hole clockwise to the metal stop on the right');
 
   const dialRef = useRef<HTMLDivElement | null>(null);
   const audioCtxRef = useRef<AudioContext | null>(null);
   const lastRatchetAngleRef = useRef(0);
-  const startPointerAngleRef = useRef(0);
-  const currentRotationRef = useRef(0);
-  currentRotationRef.current = wheelRotation;
+  const lastPointerAngleRef = useRef(0);
+  const accumulatedRotationRef = useRef(0);
+  const isEmittingRef = useRef(false);
 
   // Initialize Web Audio context for realistic mechanical sound feedback
   const initAudio = () => {
@@ -140,30 +139,35 @@ export const InteractiveRotaryDial: React.FC<InteractiveRotaryDialProps> = ({
   };
 
   const handlePointerDown = (digitConf: DigitConfig, e: React.PointerEvent) => {
-    if (disabled || isReturning || isDragging) return;
+    if (disabled || isReturning || isDragging || isEmittingRef.current) return;
     initAudio();
 
     const pointerAngle = getPointerAngle(e);
-    startPointerAngleRef.current = pointerAngle;
+    lastPointerAngleRef.current = pointerAngle;
+    accumulatedRotationRef.current = 0;
     lastRatchetAngleRef.current = 0;
     setActiveDragDigit(digitConf);
     setIsDragging(true);
-    setInstructionHint(`Dialing '${digitConf.digit}': Drag clockwise down to the metal stop...`);
+    setInstructionHint(`Dialing '${digitConf.digit}': Drag clockwise to the metal stop...`);
 
-    // Capture pointer events on the target element
     (e.target as HTMLElement).setPointerCapture?.(e.pointerId);
   };
 
   const handlePointerMove = (e: React.PointerEvent) => {
-    if (!isDragging || !activeDragDigit) return;
+    if (!isDragging || !activeDragDigit || isReturning) return;
 
     const currentPointerAngle = getPointerAngle(e);
-    let delta = currentPointerAngle - startPointerAngleRef.current;
-    if (delta < -180) delta += 360;
-    if (delta > 180) delta -= 360;
+    let stepDelta = currentPointerAngle - lastPointerAngleRef.current;
 
-    // Only allow clockwise movement (positive delta)
-    let newRotation = Math.max(0, delta);
+    // Handle 0/360 wrap-around
+    if (stepDelta < -180) stepDelta += 360;
+    if (stepDelta > 180) stepDelta -= 360;
+
+    lastPointerAngleRef.current = currentPointerAngle;
+
+    // Only add clockwise rotation (or allow small counter-clockwise adjustments down to 0)
+    let newRotation = accumulatedRotationRef.current + stepDelta;
+    newRotation = Math.max(0, newRotation);
 
     // Limit maximum rotation to the finger stop for this digit
     const maxRotation = activeDragDigit.windUpAngle;
@@ -171,6 +175,7 @@ export const InteractiveRotaryDial: React.FC<InteractiveRotaryDialProps> = ({
       newRotation = maxRotation;
     }
 
+    accumulatedRotationRef.current = newRotation;
     setWheelRotation(newRotation);
 
     // Play ratchet clicks as user rotates clockwise
@@ -181,28 +186,26 @@ export const InteractiveRotaryDial: React.FC<InteractiveRotaryDialProps> = ({
   };
 
   const handlePointerUp = (e: React.PointerEvent) => {
-    if (!isDragging || !activeDragDigit) return;
+    if (!isDragging || !activeDragDigit || isReturning) return;
     try {
       (e.target as HTMLElement).releasePointerCapture?.(e.pointerId);
     } catch (err) {}
 
     setIsDragging(false);
-    const finalRotation = currentRotationRef.current;
+    const finalRotation = accumulatedRotationRef.current;
     const targetAngle = activeDragDigit.windUpAngle;
     const digitToDial = activeDragDigit.digit;
     const requiredPulses = digitToDial === '0' ? 10 : parseInt(digitToDial, 10);
 
     // Check if user dragged sufficiently close to the stop (at least 75% of the way)
     if (finalRotation >= targetAngle * 0.75) {
-      // Complete rotation cleanly to the stop if nearly there
       setWheelRotation(targetAngle);
       setIsReturning(true);
       setTotalPulsesForDigit(requiredPulses);
       setPulsesCounted(0);
-      setInstructionHint(`Releasing wheel... Sending ${requiredPulses} pulses at 10 PPS`);
+      setInstructionHint(`Sending ${requiredPulses} pulses at 10 PPS...`);
 
-      // Spring-back animation at authentic 10 pulses/sec governor rate (~100ms per pulse)
-      const returnDurationMs = Math.max(300, requiredPulses * 95);
+      const returnDurationMs = Math.max(280, requiredPulses * 95);
       const startTime = Date.now();
       const startAngle = targetAngle;
       let pulseCounter = 0;
@@ -218,7 +221,6 @@ export const InteractiveRotaryDial: React.FC<InteractiveRotaryDialProps> = ({
       const animInterval = setInterval(() => {
         const elapsed = Date.now() - startTime;
         const progress = Math.min(1, elapsed / returnDurationMs);
-        // Linear governor-regulated return speed
         const currentReturnAngle = startAngle * (1 - progress);
         setWheelRotation(currentReturnAngle);
 
@@ -226,18 +228,25 @@ export const InteractiveRotaryDial: React.FC<InteractiveRotaryDialProps> = ({
           clearInterval(animInterval);
           clearInterval(pulseInterval);
           setWheelRotation(0);
+          accumulatedRotationRef.current = 0;
           setIsReturning(false);
           setActiveDragDigit(null);
           setPulsesCounted(0);
           setTotalPulsesForDigit(0);
-          setInstructionHint('Drag any finger hole clockwise to the metal stop and release');
-          onDialDigit(digitToDial);
+          setInstructionHint('Drag any finger hole clockwise to the metal stop on the right');
+          
+          // Emit exactly once
+          if (!isEmittingRef.current) {
+            isEmittingRef.current = true;
+            onDialDigit(digitToDial);
+            setTimeout(() => { isEmittingRef.current = false; }, 80);
+          }
         }
       }, 16);
     } else {
-      // If user released too early without dragging to the stop, quickly snap back without dialing
+      // Released too early: snap back without dialing
       setIsReturning(true);
-      setInstructionHint('Dial cancelled (must drag all the way to the metal stop)');
+      setInstructionHint('Dial cancelled (drag all the way to the metal stop)');
       const startAngle = finalRotation;
       const snapStartTime = Date.now();
       const snapInterval = setInterval(() => {
@@ -248,15 +257,16 @@ export const InteractiveRotaryDial: React.FC<InteractiveRotaryDialProps> = ({
         if (progress >= 1) {
           clearInterval(snapInterval);
           setWheelRotation(0);
+          accumulatedRotationRef.current = 0;
           setIsReturning(false);
           setActiveDragDigit(null);
-          setInstructionHint('Drag any finger hole clockwise to the metal stop and release');
+          setInstructionHint('Drag any finger hole clockwise to the metal stop on the right');
         }
       }, 16);
     }
   };
 
-  const dialRadius = 104; // distance from center (140, 140) to digit hole centers
+  const dialRadius = 104;
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '1rem', userSelect: 'none', width: '100%' }}>
@@ -317,7 +327,7 @@ export const InteractiveRotaryDial: React.FC<InteractiveRotaryDialProps> = ({
           })}
         </div>
 
-        {/* Rotating Transparent Finger Wheel (Holes overlaying the numbers) */}
+        {/* Rotating Transparent Finger Wheel */}
         <div
           style={{
             position: 'absolute',
@@ -333,7 +343,6 @@ export const InteractiveRotaryDial: React.FC<InteractiveRotaryDialProps> = ({
         >
           {DIGIT_CONFIGS.map((conf) => {
             const angleRad = (conf.restAngleDeg * Math.PI) / 180;
-            // Radius relative to the inner rotating wheel (width: 268px, center: 134, 134)
             const holeRadius = dialRadius;
             const x = 134 + holeRadius * Math.cos(angleRad) - 20;
             const y = 134 + holeRadius * Math.sin(angleRad) - 20;
@@ -363,11 +372,9 @@ export const InteractiveRotaryDial: React.FC<InteractiveRotaryDialProps> = ({
                   display: 'flex',
                   alignItems: 'center',
                   justifyContent: 'center',
-                  padding: 0,
-                  transition: isDragging ? 'none' : 'border-color 0.15s, box-shadow 0.15s'
+                  padding: 0
                 }}
               >
-                {/* Finger Hole Inner Rim */}
                 <div
                   style={{
                     width: '12px',
@@ -382,7 +389,7 @@ export const InteractiveRotaryDial: React.FC<InteractiveRotaryDialProps> = ({
           })}
         </div>
 
-        {/* Center Vintage Hub Plate */}
+        {/* Center Hub Plate */}
         <div
           style={{
             width: '94px',
@@ -408,7 +415,7 @@ export const InteractiveRotaryDial: React.FC<InteractiveRotaryDialProps> = ({
           </span>
         </div>
 
-        {/* Authentic Stationary Metal Finger Stop Bracket at ~140 deg (lower right) */}
+        {/* Authentic Stationary Metal Finger Stop Bracket at Right Side (~85 deg) */}
         {(() => {
           const stopRad = (FINGER_STOP_ANGLE_DEG * Math.PI) / 180;
           const stopDist = 114;
@@ -427,12 +434,11 @@ export const InteractiveRotaryDial: React.FC<InteractiveRotaryDialProps> = ({
                 borderRadius: '4px',
                 boxShadow: '0 4px 8px rgba(0,0,0,0.8), inset 0 1px 2px rgba(255,255,255,0.8)',
                 border: '1px solid rgba(255,255,255,0.5)',
-                transform: 'rotate(50deg)',
+                transform: 'rotate(-5deg)',
                 zIndex: 25,
                 pointerEvents: 'none'
               }}
             >
-              {/* Chrome fastener rivet */}
               <div
                 style={{
                   position: 'absolute',

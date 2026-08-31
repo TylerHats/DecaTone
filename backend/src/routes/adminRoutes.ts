@@ -511,7 +511,7 @@ router.get('/update/check', async (req: AuthenticatedRequest, res: Response) => 
     const channel = channelRow?.value || 'stable';
 
     const installedVersionRow = await queryOne<any>('SELECT value FROM system_settings WHERE key = "installed_version"');
-    const installedVersion = installedVersionRow?.value || '1.0.0';
+    const installedVersion = installedVersionRow?.value || '1.2.2';
 
     let targetVersion = installedVersion;
     let latestReleaseInfo: any = null;
@@ -553,7 +553,23 @@ router.get('/update/check', async (req: AuthenticatedRequest, res: Response) => 
     }
 
     const normalize = (v: string) => (v ? v.replace(/^v/i, '').trim().toLowerCase() : '');
-    const updateAvailable = normalize(targetVersion) !== '' && normalize(installedVersion) !== normalize(targetVersion);
+    const normTarget = normalize(targetVersion);
+    const normInstalled = normalize(installedVersion);
+
+    // Semver comparator (only notify if target > installed)
+    const semverGT = (a: string, b: string) => {
+      const pa = a.split('.').map(n => parseInt(n, 10) || 0);
+      const pb = b.split('.').map(n => parseInt(n, 10) || 0);
+      for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+        const na = pa[i] || 0;
+        const nb = pb[i] || 0;
+        if (na > nb) return true;
+        if (na < nb) return false;
+      }
+      return false;
+    };
+
+    const updateAvailable = normTarget !== '' && (channel === 'alpha' ? normInstalled !== normTarget : semverGT(normTarget, normInstalled));
     const isDocker = isDockerEnvironment();
 
     return res.json({
@@ -562,7 +578,7 @@ router.get('/update/check', async (req: AuthenticatedRequest, res: Response) => 
       channel,
       updateAvailable,
       isDocker,
-      dockerImage: 'ghcr.io/tylerhats/decatone:latest',
+      dockerImage: 'tylerhats/decatone:latest',
       latestRelease: latestReleaseInfo || { tag: targetVersion, name: `DecaTone ${targetVersion}`, notes: 'You are running the latest version.' }
     });
   } catch (err) {
@@ -869,4 +885,33 @@ router.put('/mqtt', async (req: AuthenticatedRequest, res: Response) => {
   }
 });
 
+// General Admin System Settings
+router.get('/settings', async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const rows = await query<any>('SELECT key, value FROM system_settings');
+    const settingsMap: Record<string, string> = {};
+    for (const r of rows) {
+      settingsMap[r.key] = r.value;
+    }
+    return res.json({ settings: settingsMap });
+  } catch (err) {
+    return res.status(500).json({ error: 'Failed to fetch admin settings' });
+  }
+});
+
+router.post('/settings', async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const { settings } = req.body;
+    if (settings && typeof settings === 'object') {
+      for (const [key, value] of Object.entries(settings)) {
+        await execute('INSERT OR REPLACE INTO system_settings (key, value) VALUES (?, ?)', [key, String(value)]);
+      }
+    }
+    return res.json({ success: true, message: 'System settings saved successfully!' });
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message || 'Failed to save system settings' });
+  }
+});
+
 export default router;
+

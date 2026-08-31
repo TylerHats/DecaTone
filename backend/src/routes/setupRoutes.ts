@@ -36,33 +36,36 @@ router.post('/initialize', async (req: Request, res: Response) => {
       phoneNumberLength,
       phoneNumberMinLength,
       phoneNumberMaxLength,
-      assignmentMode
+      assignmentMode,
+      adminPhoneNumber,
+      adminExtension
     } = req.body;
 
     if (!username || !password) {
       return res.status(400).json({ error: 'Username and password are required' });
     }
 
+    const minLen = parseInt(phoneNumberMinLength || phoneNumberLength || '4', 10);
+    const maxLen = parseInt(phoneNumberMaxLength || phoneNumberMinLength || '10', 10);
+
     // Save System Settings
     if (appName) {
       await execute('INSERT OR REPLACE INTO system_settings (key, value) VALUES (?, ?)', ['app_name', appName.trim()]);
     }
-    if (phoneNumberLength) {
-      await execute('INSERT OR REPLACE INTO system_settings (key, value) VALUES (?, ?)', ['phone_number_length', String(phoneNumberLength)]);
-    }
-    if (phoneNumberMinLength) {
-      await execute('INSERT OR REPLACE INTO system_settings (key, value) VALUES (?, ?)', ['number_min_length', String(phoneNumberMinLength)]);
-    }
-    if (phoneNumberMaxLength) {
-      await execute('INSERT OR REPLACE INTO system_settings (key, value) VALUES (?, ?)', ['number_max_length', String(phoneNumberMaxLength)]);
-    }
+    await execute('INSERT OR REPLACE INTO system_settings (key, value) VALUES (?, ?)', ['phone_number_length', String(minLen)]);
+    await execute('INSERT OR REPLACE INTO system_settings (key, value) VALUES (?, ?)', ['number_min_length', String(minLen)]);
+    await execute('INSERT OR REPLACE INTO system_settings (key, value) VALUES (?, ?)', ['number_max_length', String(maxLen)]);
     if (assignmentMode) {
       await execute('INSERT OR REPLACE INTO system_settings (key, value) VALUES (?, ?)', ['assignment_mode', String(assignmentMode)]);
     }
+    await execute('INSERT OR REPLACE INTO system_settings (key, value) VALUES (?, ?)', ['installed_version', '1.2.2']);
+    await execute('INSERT OR REPLACE INTO system_settings (key, value) VALUES (?, ?)', ['firmware_latest_version', '1.2.2']);
 
-    // Determine initial master extension number (e.g. 1000 or 100)
-    const len = parseInt(phoneNumberMinLength || phoneNumberLength || '4', 10);
-    const initialExt = '1' + '0'.repeat(Math.max(2, len - 1));
+    // Determine initial master extension number
+    let initialExt = (adminPhoneNumber || adminExtension || '').trim();
+    if (!initialExt || initialExt.length < minLen || initialExt.length > maxLen) {
+      initialExt = '1' + '0'.repeat(Math.max(2, minLen - 1));
+    }
 
     // Hash password
     const salt = await bcrypt.genSalt(10);

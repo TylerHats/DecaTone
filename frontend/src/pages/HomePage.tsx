@@ -68,6 +68,12 @@ export const HomePage: React.FC = () => {
     const target = numToDial || typedNumber;
     if (!target) return;
 
+    // If hardware is not connected or offline, seamlessly open the Web Softphone
+    if (!phone || !phone.isOnline) {
+      setShowWebPhone(true);
+      return;
+    }
+
     setDialing(true);
     setStatusMsg(null);
     const success = await dialNumber(target);
@@ -77,7 +83,8 @@ export const HomePage: React.FC = () => {
       setStatusMsg({ type: 'success', text: `Initiating call to ${target}...` });
       setTypedNumber('');
     } else {
-      setStatusMsg({ type: 'error', text: 'Failed to place call. Ensure your ESP32-S3 hardware is online.' });
+      // Fallback to Web Softphone
+      setShowWebPhone(true);
     }
   };
 
@@ -123,7 +130,7 @@ export const HomePage: React.FC = () => {
             </button>
           ) : (
             <Link to="/onboarding" className="btn btn-primary btn-sm">
-              <Zap size={16} /> Pair Your ESP32-S3 Phone
+              <Zap size={16} /> Pair Your Rotary Phone
             </Link>
           )}
 

@@ -6,6 +6,26 @@ const router = Router();
 router.use(authenticateToken);
 
 
+// List Accepted Friends
+router.get('/', async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const currentUserId = req.user!.id;
+    const friends = await query<any>(
+      `SELECT u.id, u.username, u.display_name, u.phone_number, u.avatar_url, u.is_disabled, f.created_at
+       FROM friends f
+       JOIN users u ON (u.id = CASE WHEN f.user_id = ? THEN f.friend_id ELSE f.user_id END)
+       WHERE (f.user_id = ? OR f.friend_id = ?) AND f.status = 'accepted'
+       ORDER BY u.display_name ASC`,
+      [currentUserId, currentUserId, currentUserId]
+    );
+
+    return res.json({ friends });
+  } catch (err: any) {
+    console.error('Fetch friends error:', err);
+    return res.status(500).json({ error: 'Failed to fetch friends list' });
+  }
+});
+
 // List Incoming and Outgoing Friend Requests
 router.get('/requests', async (req: AuthenticatedRequest, res: Response) => {
   try {

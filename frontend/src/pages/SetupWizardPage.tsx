@@ -10,9 +10,10 @@ export const SetupWizardPage: React.FC = () => {
   const [username, setUsername] = useState('admin');
   const [password, setPassword] = useState('');
   const [displayName, setDisplayName] = useState('System Administrator');
+  const [adminPhoneNumber, setAdminPhoneNumber] = useState('1000');
   const [appNameInput, setAppNameInput] = useState('DecaTone');
   const [phoneNumberMinLength, setPhoneNumberMinLength] = useState('4');
-  const [phoneNumberMaxLength, setPhoneNumberMaxLength] = useState('4');
+  const [phoneNumberMaxLength, setPhoneNumberMaxLength] = useState('7');
   const [assignmentMode, setAssignmentMode] = useState('user_choice');
   const [error, setError] = useState('');
   const [submitting, setSubmitting] = useState(false);
@@ -30,6 +31,7 @@ export const SetupWizardPage: React.FC = () => {
           username,
           password,
           displayName,
+          adminPhoneNumber,
           appName: appNameInput,
           phoneNumberLength: phoneNumberMinLength,
           phoneNumberMinLength,
@@ -52,7 +54,7 @@ export const SetupWizardPage: React.FC = () => {
   };
 
   return (
-    <div style={{ maxWidth: '560px', margin: '3rem auto', width: '100%' }}>
+    <div style={{ maxWidth: '600px', margin: '3rem auto', width: '100%' }}>
       <div className="glass-card highlight-cyan" style={{ padding: '2.5rem 2rem' }}>
         <div style={{ textAlign: 'center', marginBottom: '2rem' }}>
           <img
@@ -82,37 +84,53 @@ export const SetupWizardPage: React.FC = () => {
         )}
 
         <form onSubmit={handleSubmit}>
-          <div className="form-group">
-            <label className="form-label">Admin Username</label>
-            <input
-              type="text"
-              className="form-input"
-              required
-              value={username}
-              onChange={(e) => setUsername(e.target.value)}
-            />
+          <div className="grid-2">
+            <div className="form-group">
+              <label className="form-label">Admin Username</label>
+              <input
+                type="text"
+                className="form-input"
+                required
+                value={username}
+                onChange={(e) => setUsername(e.target.value)}
+              />
+            </div>
+
+            <div className="form-group">
+              <label className="form-label">Display Name</label>
+              <input
+                type="text"
+                className="form-input"
+                value={displayName}
+                onChange={(e) => setDisplayName(e.target.value)}
+              />
+            </div>
           </div>
 
-          <div className="form-group">
-            <label className="form-label">Display Name</label>
-            <input
-              type="text"
-              className="form-input"
-              value={displayName}
-              onChange={(e) => setDisplayName(e.target.value)}
-            />
-          </div>
+          <div className="grid-2">
+            <div className="form-group">
+              <label className="form-label">Admin Password</label>
+              <input
+                type="password"
+                className="form-input"
+                required
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                placeholder="••••••••"
+              />
+            </div>
 
-          <div className="form-group">
-            <label className="form-label">Admin Password</label>
-            <input
-              type="password"
-              className="form-input"
-              required
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              placeholder="••••••••"
-            />
+            <div className="form-group">
+              <label className="form-label">Admin Extension Number</label>
+              <input
+                type="text"
+                className="form-input"
+                required
+                value={adminPhoneNumber}
+                onChange={(e) => setAdminPhoneNumber(e.target.value.replace(/\D/g, ''))}
+                placeholder="e.g. 1000 or 5550100"
+              />
+            </div>
           </div>
 
           <div style={{ marginTop: '1.5rem', borderTop: '1px solid var(--border-subtle)', paddingTop: '1.25rem' }}>
@@ -149,10 +167,11 @@ export const SetupWizardPage: React.FC = () => {
                   value={phoneNumberMinLength}
                   onChange={(e) => setPhoneNumberMinLength(e.target.value)}
                 >
-                  <option value="3">3 Digits (100-999)</option>
-                  <option value="4">4 Digits (1000-9999)</option>
-                  <option value="5">5 Digits (10000-99999)</option>
+                  <option value="3">3 Digits (100–999)</option>
+                  <option value="4">4 Digits (1000–9999)</option>
+                  <option value="5">5 Digits (10000–99999)</option>
                   <option value="7">7 Digits (Standard Local)</option>
+                  <option value="10">10 Digits (Full Phone Number)</option>
                 </select>
               </div>
 
@@ -163,10 +182,11 @@ export const SetupWizardPage: React.FC = () => {
                   value={phoneNumberMaxLength}
                   onChange={(e) => setPhoneNumberMaxLength(e.target.value)}
                 >
-                  <option value="3">3 Digits (100-999)</option>
-                  <option value="4">4 Digits (1000-9999)</option>
-                  <option value="5">5 Digits (10000-99999)</option>
+                  <option value="3">3 Digits (100–999)</option>
+                  <option value="4">4 Digits (1000–9999)</option>
+                  <option value="5">5 Digits (10000–99999)</option>
                   <option value="7">7 Digits (Standard Local)</option>
+                  <option value="10">10 Digits (Full Phone Number)</option>
                 </select>
               </div>
             </div>

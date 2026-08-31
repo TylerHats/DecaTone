@@ -7,12 +7,12 @@ import { useBranding } from '../context/BrandingContext';
 
 export const OnboardingPage: React.FC = () => {
   const { user } = useAuth();
-  const { phone, claimPhone, testRing } = usePhone();
+  const { phone, claimPhoneByCode, testRing } = usePhone();
   const { appName } = useBranding();
   const navigate = useNavigate();
 
   const [step, setStep] = useState(1);
-  const [deviceIdInput, setDeviceIdInput] = useState('');
+  const [pairingCodeInput, setPairingCodeInput] = useState('');
   const [copiedServerUrl, setCopiedServerUrl] = useState(false);
   const [pairing, setPairing] = useState(false);
   const [pairError, setPairError] = useState('');
@@ -30,18 +30,18 @@ export const OnboardingPage: React.FC = () => {
 
   const handlePair = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!deviceIdInput.trim()) return;
+    if (!pairingCodeInput.trim()) return;
 
     setPairing(true);
     setPairError('');
-    const success = await claimPhone(deviceIdInput.trim());
+    const success = await claimPhoneByCode('', '', pairingCodeInput.trim());
     setPairing(false);
 
     if (success) {
       setPairSuccess(true);
       setStep(4);
     } else {
-      setPairError('Could not pair phone. Please check the Device ID and ensure the ESP32-S3 is powered on.');
+      setPairError('Could not pair phone. Please ensure your DecaTone adapter is powered on and connected to the switchboard.');
     }
   };
 
@@ -58,10 +58,10 @@ export const OnboardingPage: React.FC = () => {
       <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '2.5rem', position: 'relative' }}>
         <div style={{ position: 'absolute', top: '18px', left: '30px', right: '30px', height: '2px', background: 'var(--border-subtle)', zIndex: 1 }} />
         {[
-          { num: 1, title: 'Setup WiFi' },
-          { num: 2, title: 'Server URL' },
-          { num: 3, title: 'Enter Device ID' },
-          { num: 4, title: 'Ring Test' }
+          { num: 1, title: 'Connect to Setup AP' },
+          { num: 2, title: 'Server Address' },
+          { num: 3, title: 'Enter Pairing Code' },
+          { num: 4, title: 'Bell Ringer Test' }
         ].map((s) => {
           const isDone = step > s.num;
           const isCurrent = step === s.num;
@@ -106,7 +106,7 @@ export const OnboardingPage: React.FC = () => {
         })}
       </div>
 
-      {/* Step 1: Connect to ESP32-S3 SoftAP */}
+      {/* Step 1: Connect to Setup AP */}
       {step === 1 && (
         <div className="glass-card highlight-cyan" style={{ padding: '2.5rem 2rem' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '1rem' }}>
@@ -114,20 +114,20 @@ export const OnboardingPage: React.FC = () => {
               <Wifi size={24} />
             </div>
             <div>
-              <h2 style={{ fontSize: '1.4rem' }}>Step 1: Connect to ESP32-S3 Setup WiFi</h2>
-              <p style={{ color: 'var(--text-muted)', fontSize: '0.875rem' }}>Power on your rotary phone to start initial provisioning</p>
+              <h2 style={{ fontSize: '1.4rem' }}>Step 1: Connect to Telephone Setup WiFi</h2>
+              <p style={{ color: 'var(--text-muted)', fontSize: '0.875rem' }}>Power on your rotary phone adapter to start initial setup</p>
             </div>
           </div>
 
           <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem', margin: '1.5rem 0', color: 'var(--text-main)', fontSize: '0.95rem' }}>
             <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'flex-start' }}>
               <span style={{ background: 'rgba(255,255,255,0.06)', padding: '2px 8px', borderRadius: '4px', fontWeight: '700' }}>1</span>
-              <span>Plug in your ESP32-S3 rotary phone using USB-C or internal 5V power supply.</span>
+              <span>Plug in your DecaTone telephone adapter using USB-C or internal 5V power supply.</span>
             </div>
             <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'flex-start' }}>
               <span style={{ background: 'rgba(255,255,255,0.06)', padding: '2px 8px', borderRadius: '4px', fontWeight: '700' }}>2</span>
               <span>
-                On your phone or laptop, look for the WiFi network named <strong style={{ color: 'var(--accent-amber)', fontFamily: 'var(--font-mono)' }}>DecaTone-Setup-XXXX</strong> and connect to it. (Default Password: <code style={{ fontFamily: 'var(--font-mono)' }}>rotary123</code> or open).
+                On your phone or computer, open your WiFi settings and connect to the open network named <strong style={{ color: 'var(--accent-amber)', fontFamily: 'var(--font-mono)' }}>DecaTone-Setup-XXXX</strong> (no password required).
               </span>
             </div>
             <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'flex-start' }}>
@@ -158,7 +158,7 @@ export const OnboardingPage: React.FC = () => {
           </div>
 
           <p style={{ color: 'var(--text-muted)', fontSize: '0.95rem', margin: '1rem 0' }}>
-            In the ESP32-S3 web setup screen, select your home WiFi network, enter its password, and copy & paste this server base URL into the <strong>Server Base URL</strong> field:
+            In the telephone setup screen, select your home WiFi network, enter its password, and copy & paste this server base URL into the <strong>Server Base URL</strong> field:
           </p>
 
           <div
@@ -187,27 +187,27 @@ export const OnboardingPage: React.FC = () => {
               Back
             </button>
             <button onClick={() => setStep(3)} className="btn btn-primary btn-lg" style={{ flex: 2 }}>
-              Next: Pair Device ID <ArrowRight size={18} />
+              Next: Enter Pairing Code <ArrowRight size={18} />
             </button>
           </div>
         </div>
       )}
 
-      {/* Step 3: Enter Device ID */}
+      {/* Step 3: Enter Pairing Code */}
       {step === 3 && (
         <div className="glass-card highlight-amber" style={{ padding: '2.5rem 2rem' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '1rem' }}>
             <div style={{ padding: '0.6rem', borderRadius: '12px', background: 'rgba(245, 158, 11, 0.15)', color: 'var(--accent-amber)' }}>
-              <Cpu size={24} />
+              <Zap size={24} />
             </div>
             <div>
-              <h2 style={{ fontSize: '1.4rem' }}>Step 3: Pair Your Unique Device ID</h2>
-              <p style={{ color: 'var(--text-muted)', fontSize: '0.875rem' }}>Link your ESP32-S3 rotary hardware to your user account</p>
+              <h2 style={{ fontSize: '1.4rem' }}>Step 3: Enter Hardware Pairing Code</h2>
+              <p style={{ color: 'var(--text-muted)', fontSize: '0.875rem' }}>Link your telephone hardware to your account</p>
             </div>
           </div>
 
           <p style={{ color: 'var(--text-muted)', fontSize: '0.95rem', margin: '1rem 0' }}>
-            After saving your WiFi and Server settings on the ESP32-S3, the setup page will display a unique <strong>Device ID</strong> (e.g. <code style={{ fontFamily: 'var(--font-mono)' }}>DT-A1B2C3D4</code>). Enter or paste it below:
+            Once connected, your telephone adapter will display a <strong>Word + Digits Pairing Code</strong> (e.g. <strong style={{ color: '#fff', fontFamily: 'var(--font-mono)' }}>TONE-4821</strong> or <strong style={{ color: '#fff', fontFamily: 'var(--font-mono)' }}>4821</strong>). Enter it below:
           </p>
 
           {pairError && (
@@ -228,15 +228,15 @@ export const OnboardingPage: React.FC = () => {
 
           <form onSubmit={handlePair}>
             <div className="form-group" style={{ marginBottom: '1.5rem' }}>
-              <label className="form-label">ESP32-S3 Unique Device ID</label>
+              <label className="form-label">Pairing Code</label>
               <input
                 type="text"
                 className="form-input"
                 required
                 autoFocus
-                value={deviceIdInput}
-                onChange={(e) => setDeviceIdInput(e.target.value.toUpperCase())}
-                placeholder="e.g. DT-3485189A"
+                value={pairingCodeInput}
+                onChange={(e) => setPairingCodeInput(e.target.value.toUpperCase())}
+                placeholder="e.g. TONE-4821 or 4821"
                 style={{ fontFamily: 'var(--font-mono)', fontSize: '1.2rem', letterSpacing: '0.1em', textAlign: 'center' }}
               />
             </div>
@@ -245,76 +245,51 @@ export const OnboardingPage: React.FC = () => {
               <button type="button" onClick={() => setStep(2)} className="btn btn-secondary btn-lg" style={{ flex: 1 }}>
                 Back
               </button>
-              <button type="submit" disabled={pairing || !deviceIdInput} className="btn btn-amber btn-lg" style={{ flex: 2 }}>
-                {pairing ? 'Linking Phone...' : 'Pair Phone to My Account'}
+              <button type="submit" disabled={pairing || !pairingCodeInput} className="btn btn-amber btn-lg" style={{ flex: 2 }}>
+                {pairing ? 'Pairing Phone...' : 'Pair Telephone to My Account'}
               </button>
             </div>
           </form>
         </div>
       )}
 
-      {/* Step 4: Ring Test & Completion */}
+      {/* Step 4: Test Mechanical Bell Ringer */}
       {step === 4 && (
         <div className="glass-card highlight-cyan" style={{ padding: '2.5rem 2rem', textAlign: 'center' }}>
-          <div
-            style={{
-              width: '72px',
-              height: '72px',
-              borderRadius: '50%',
-              background: 'rgba(16, 185, 129, 0.2)',
-              border: '2px solid #10b981',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              margin: '0 auto 1.5rem'
-            }}
-          >
-            <CheckCircle2 size={36} color="#10b981" />
+          <div style={{ width: '64px', height: '64px', borderRadius: '50%', background: 'rgba(16, 185, 129, 0.2)', color: '#34d399', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 1.5rem auto' }}>
+            <CheckCircle2 size={36} />
           </div>
 
-          <h2 style={{ fontSize: '1.6rem', marginBottom: '0.5rem' }}>Phone Paired Successfully!</h2>
-          <p style={{ color: 'var(--text-muted)', fontSize: '0.95rem', maxWidth: '480px', margin: '0 auto 1.5rem' }}>
-            Your ESP32-S3 rotary phone is now registered to extension <strong style={{ color: 'var(--accent-amber)', fontFamily: 'var(--font-mono)' }}>EXT {user?.phoneNumber}</strong> on {appName}.
+          <h2 style={{ fontSize: '1.6rem', marginBottom: '0.5rem' }}>Telephone Paired Successfully!</h2>
+          <p style={{ color: 'var(--text-muted)', fontSize: '0.95rem', maxWidth: '480px', margin: '0 auto 1.5rem auto' }}>
+            Your rotary telephone is now connected to <strong style={{ color: '#fff' }}>EXT {user?.phoneNumber}</strong>. Let's send a test ring signal to verify the mechanical bell driver.
           </p>
 
-          <div
-            style={{
-              background: 'rgba(255,255,255,0.03)',
-              padding: '1.5rem',
-              borderRadius: 'var(--radius-md)',
-              border: '1px solid var(--border-subtle)',
-              marginBottom: '2rem'
-            }}
-          >
-            <h4 style={{ fontSize: '1rem', marginBottom: '0.75rem' }}>Test Your Physical Bell Ringer</h4>
-            <p style={{ color: 'var(--text-dim)', fontSize: '0.85rem', marginBottom: '1rem' }}>
-              Click below to send a 20Hz pulse burst through the IRF640N MOSFET and ring your rotary telephone's mechanical bells.
-            </p>
-
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem', maxWidth: '360px', margin: '0 auto 2rem auto' }}>
             <button
+              type="button"
               onClick={handleTestRing}
               disabled={testingRing}
               className="btn btn-amber btn-lg"
-              style={{ minWidth: '220px' }}
+              style={{ width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.5rem' }}
             >
-              <BellRing size={20} /> {testingRing ? 'Sending Signal...' : 'Ring Physical Bell'}
+              <BellRing size={20} /> {testingRing ? 'Ringing Bell...' : 'Test Bell Ringer'}
             </button>
 
             {ringSuccess && (
-              <div style={{ marginTop: '0.75rem', color: '#34d399', fontSize: '0.85rem', fontWeight: '600' }}>
-                &check; Test ring sent! Did your bell chime?
+              <div style={{ color: '#34d399', fontSize: '0.9rem', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.4rem' }}>
+                <CheckCircle2 size={16} /> Signal sent! Your telephone should be ringing.
               </div>
             )}
           </div>
 
-          <div style={{ display: 'flex', justifyContent: 'center', gap: '1rem' }}>
-            <Link to="/settings" className="btn btn-secondary">
-              Tune Audio & Cadence
-            </Link>
-            <Link to="/" className="btn btn-primary btn-lg">
-              Go to Switchboard Dashboard &rarr;
-            </Link>
-          </div>
+          <button
+            onClick={() => navigate('/')}
+            className="btn btn-primary btn-lg"
+            style={{ width: '100%', maxWidth: '360px' }}
+          >
+            Go to Switchboard Dashboard &rarr;
+          </button>
         </div>
       )}
     </div>
