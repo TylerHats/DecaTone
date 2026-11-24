@@ -21,8 +21,10 @@
   --text-muted: #94a3b8;
   --text-dim: #64748b;
 
-  --font-sans: 'Outfit', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-  --font-mono: 'JetBrains Mono', monospace;
+  --font-sans: 'Outfit', 'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto,
+    'Helvetica Neue', Arial, sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas,
+    'Liberation Mono', 'Courier New', monospace;
 
   --radius-sm: 8px;
   --radius-md: 14px;
@@ -46,7 +48,7 @@ body {
   color: var(--text-main);
   min-height: 100vh;
   line-height: 1.5;
-  background-image: 
+  background-image:
     radial-gradient(circle at 15% 15%, rgba(14, 165, 233, 0.07) 0%, transparent 40%),
     radial-gradient(circle at 85% 85%, rgba(245, 158, 11, 0.05) 0%, transparent 40%),
     radial-gradient(circle at 50% 50%, rgba(15, 23, 42, 0.5) 0%, transparent 100%);
@@ -71,6 +73,16 @@ a {
 a:hover {
   color: #38bdf8;
   text-decoration: underline;
+}
+
+/* Spin Animation */
+.spin {
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
 }
 
 /* Layout Utilities */
@@ -276,10 +288,17 @@ a:hover {
   border: 1px solid rgba(148, 163, 184, 0.2);
 }
 
-.badge-busy {
+.badge-busy,
+.badge-amber {
   background: rgba(245, 158, 11, 0.15);
   color: #fbbf24;
   border: 1px solid rgba(245, 158, 11, 0.3);
+}
+
+.badge-cyan {
+  background: rgba(14, 165, 233, 0.15);
+  color: #38bdf8;
+  border: 1px solid rgba(14, 165, 233, 0.3);
 }
 
 .badge-ringing {
@@ -355,9 +374,10 @@ a:hover {
   }
 }
 
-/* Custom Sliders */
+/* Custom Sliders (WebKit + Firefox) */
 input[type="range"] {
   -webkit-appearance: none;
+  appearance: none;
   width: 100%;
   height: 8px;
   background: rgba(255, 255, 255, 0.1);
@@ -379,6 +399,28 @@ input[type="range"]::-webkit-slider-thumb {
 }
 
 input[type="range"]::-webkit-slider-thumb:hover {
+  transform: scale(1.15);
+  background: #38bdf8;
+}
+
+input[type="range"]::-moz-range-track {
+  height: 8px;
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 4px;
+}
+
+input[type="range"]::-moz-range-thumb {
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: var(--accent-cyan);
+  cursor: pointer;
+  box-shadow: 0 0 10px rgba(14, 165, 233, 0.6);
+  border: 2px solid #fff;
+  transition: all 0.15s ease;
+}
+
+input[type="range"]::-moz-range-thumb:hover {
   transform: scale(1.15);
   background: #38bdf8;
 }

@@ -16,6 +16,19 @@ if ! command -v docker-compose &> /dev/null && ! docker compose version &> /dev/
     exit 1
 fi
 
+# Auto-generate cryptographically strong 64-hex-char JWT_SECRET if .env does not exist
+if [ ! -f .env ]; then
+    echo "🔐 Generating random 256-bit JWT_SECRET in .env..."
+    if command -v openssl &> /dev/null; then
+        GEN_SECRET="$(openssl rand -hex 32)"
+    else
+        GEN_SECRET="$(head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n')"
+    fi
+    umask 077
+    printf "JWT_SECRET=%s\n" "$GEN_SECRET" > .env
+    chmod 600 .env
+fi
+
 echo "🚀 Pulling latest DecaTone container image..."
 docker pull tylerhats/decatone:latest || echo "Notice: Local build will be used if image not on registry."
 

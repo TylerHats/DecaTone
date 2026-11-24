@@ -2,8 +2,9 @@ node_modules
 **/node_modules
 dist
 **/dist
-backend/data/*.db*
-backend/data/*.tar.gz
+data
+uploads
+backend/data/*
 backend/uploads/*
 firmware/.pio
 firmware/.vscode
@@ -11,3 +12,7 @@ firmware/.vscode
 .vscode
 .idea
 *.log
+*.pem
+*.key
+*.enc
+.env*

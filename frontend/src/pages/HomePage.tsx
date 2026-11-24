@@ -4,7 +4,6 @@ import { Phone, Users, Sliders, Voicemail, BellRing, PhoneOutgoing, Wifi, WifiOf
 import { useAuth } from '../context/AuthContext';
 import { usePhone } from '../context/PhoneContext';
 import { InteractiveRotaryDial } from '../components/InteractiveRotaryDial';
-import { WebPhoneModal } from '../components/WebPhoneModal';
 
 interface CallRecord {
   id: number;
@@ -26,14 +25,13 @@ interface SpeedDialItem {
 
 export const HomePage: React.FC = () => {
   const { user } = useAuth();
-  const { phone, currentDialBuffer, dialNumber, testRing, loading } = usePhone();
+  const { phone, currentDialBuffer, dialNumber, testRing, openWebPhoneWithNumber, setWebPhoneModalOpen } = usePhone();
   const [typedNumber, setTypedNumber] = useState('');
   const [speedDials, setSpeedDials] = useState<SpeedDialItem[]>([]);
   const [calls, setCalls] = useState<CallRecord[]>([]);
   const [ringingTest, setRingingTest] = useState(false);
   const [dialing, setDialing] = useState(false);
   const [statusMsg, setStatusMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
-  const [showWebPhone, setShowWebPhone] = useState(false);
 
   useEffect(() => {
     fetchSpeedDials();
@@ -42,35 +40,31 @@ export const HomePage: React.FC = () => {
 
   const fetchSpeedDials = async () => {
     try {
-      const res = await fetch('/api/phone/speed-dials', {
-        headers: { Authorization: `Bearer ${localStorage.getItem('decatone_token')}` }
-      });
+      const res = await fetch('/api/phone/speed-dials', { credentials: 'include' });
       if (res.ok) {
         const data = await res.json();
         setSpeedDials(data.speedDials || []);
       }
-    } catch (e) {}
+    } catch {}
   };
 
   const fetchRecentCalls = async () => {
     try {
-      const res = await fetch('/api/phone/calls', {
-        headers: { Authorization: `Bearer ${localStorage.getItem('decatone_token')}` }
-      });
+      const res = await fetch('/api/phone/calls', { credentials: 'include' });
       if (res.ok) {
         const data = await res.json();
         setCalls(data.calls || []);
       }
-    } catch (e) {}
+    } catch {}
   };
 
   const handleDial = async (numToDial?: string) => {
     const target = numToDial || typedNumber;
     if (!target) return;
 
-    // If hardware is not connected or offline, seamlessly open the Web Softphone
+    // If hardware is not connected or offline, open Web Softphone pre-filled with target extension
     if (!phone || !phone.isOnline) {
-      setShowWebPhone(true);
+      openWebPhoneWithNumber(target);
       return;
     }
 
@@ -83,8 +77,8 @@ export const HomePage: React.FC = () => {
       setStatusMsg({ type: 'success', text: `Initiating call to ${target}...` });
       setTypedNumber('');
     } else {
-      // Fallback to Web Softphone
-      setShowWebPhone(true);
+      setStatusMsg({ type: 'error', text: `Hardware dial failed for ${target}; opening Web Softphone fallback.` });
+      openWebPhoneWithNumber(target);
     }
   };
 
@@ -136,7 +130,7 @@ export const HomePage: React.FC = () => {
 
           <button
             type="button"
-            onClick={() => setShowWebPhone(true)}
+            onClick={() => openWebPhoneWithNumber(typedNumber)}
             className="btn btn-primary btn-sm"
           >
             <PhoneCall size={16} /> Web Softphone
@@ -347,7 +341,7 @@ export const HomePage: React.FC = () => {
                 </div>
                 <div style={{ display: 'flex', justifyContent: 'space-between', borderBottom: '1px solid var(--border-subtle)', paddingBottom: '0.5rem' }}>
                   <span style={{ color: 'var(--text-muted)' }}>Bell Ringer Circuit</span>
-                  <span style={{ color: 'var(--text-dim)' }}>IRF640N MOSFET (20Hz Resonant)</span>
+                  <span style={{ color: 'var(--text-dim)' }}>DRV8871 H-Bridge ({phone.bellFrequencyHz ?? 20}Hz Resonant)</span>
                 </div>
                 <div style={{ display: 'flex', justifyContent: 'space-between', borderBottom: '1px solid var(--border-subtle)', paddingBottom: '0.5rem' }}>
                   <span style={{ color: 'var(--text-muted)' }}>Firmware Version</span>
@@ -432,11 +426,8 @@ export const HomePage: React.FC = () => {
         </div>
       </div>
 
-      <WebPhoneModal
-        isOpen={showWebPhone}
-        onClose={() => setShowWebPhone(false)}
-        initialNumber={typedNumber}
-      />
+      {/* Global WebPhoneModal is mounted in App shell so any page can launch it */}
+      {void setWebPhoneModalOpen}
     </div>
   );
 };

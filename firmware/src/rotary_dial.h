@@ -10,11 +10,10 @@ class RotaryDialManager {
 public:
   void begin(DigitDialedCallback digitCb, HookStateCallback hookCb, HookFlashCallback flashCb = nullptr);
   void update();
-  bool isOffHook() const;
+  bool isOffHook() const { return m_currentOffHook; }
 
-  // Interrupt Service Routines
+  // Interrupt Service Routines for high-speed rotary mechanical contacts
   static void IRAM_ATTR handlePulseInterrupt();
-  static void IRAM_ATTR handleHookInterrupt();
   static void IRAM_ATTR handleOffNormalInterrupt();
 
 private:
@@ -23,19 +22,29 @@ private:
   HookFlashCallback m_flashCallback = nullptr;
 
   bool m_currentOffHook = false;
-  uint32_t m_hookDebounceTime = 0;
+  bool m_debouncedOffHook = false;
+  bool m_lastRawOffHook = false;
+  uint32_t m_lastHookBounceTime = 0;
+
   uint32_t m_hookDownStartTime = 0;
   bool m_evaluatingHookFlash = false;
 
-  // Pulse & Rhythm Tracking
+  void syncIsrOffHookGate(bool allowPulses);
+  void resetPulseCounters();
+
+  // Shared ISR Pulse & Rhythm Tracking (protected by s_mux)
+  static portMUX_TYPE s_mux;
   static volatile uint32_t s_pulseCount;
   static volatile uint32_t s_firstPulseTime;
   static volatile uint32_t s_lastPulseTime;
   static volatile uint32_t s_totalBreakDurationMs;
   static volatile uint32_t s_pulseBreakStart;
+  static volatile uint32_t s_totalMakeDurationMs;
+  static volatile uint32_t s_lastMakeStart;
   static volatile bool s_offNormalActive;
-  static volatile bool s_hookChanged;
-  static volatile uint32_t s_lastHookTime;
+  static volatile bool s_offNormalSeen;
+  static volatile uint32_t s_offNormalReleaseTime;
+  static volatile bool s_offHookGate;
 };
 
 extern RotaryDialManager RotaryDial;

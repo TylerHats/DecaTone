@@ -21,6 +21,7 @@ export const ForgotPasswordPage: React.FC = () => {
       const res = await fetch('/api/auth/forgot-password', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
         body: JSON.stringify({ usernameOrEmail: usernameOrEmail.trim() })
       });
 
@@ -42,13 +43,24 @@ export const ForgotPasswordPage: React.FC = () => {
       <div className="glass-card" style={{ padding: '2.5rem 2rem' }}>
         <div style={{ textAlign: 'center', marginBottom: '2rem' }}>
           <img
-            src={logoUrl || '/assets/decatone_logo.png'}
+            src={logoUrl || '/branding/logo.png'}
             alt={appName}
-            style={{ height: '56px', width: 'auto', marginBottom: '1rem', filter: 'drop-shadow(0 4px 12px rgba(14,165,233,0.3))' }}
+            style={{
+              height: '56px',
+              width: '56px',
+              borderRadius: '12px',
+              objectFit: 'contain',
+              marginBottom: '1rem',
+              filter: 'drop-shadow(0 4px 12px rgba(14,165,233,0.3))'
+            }}
+            onError={(e) => {
+              e.currentTarget.onerror = null;
+              e.currentTarget.src = '/branding/logo.png';
+            }}
           />
           <h2 style={{ fontSize: '1.5rem', marginBottom: '0.5rem' }}>Forgot Password</h2>
           <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem' }}>
-            Enter your username or email address and we'll send you a password reset link.
+            Enter your username or email address and we&apos;ll send you a password reset link.
           </p>
         </div>
 
@@ -90,8 +102,8 @@ export const ForgotPasswordPage: React.FC = () => {
             </div>
 
             <h3 style={{ fontSize: '1.15rem', color: '#fff' }}>Check Your Email</h3>
-            <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem', lineHeight: '1.5' }}>
-              If an account with that username or email address exists, we've dispatched a password reset link. Please check your inbox and spam folder.
+            <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem', lineHeight: 1.5 }}>
+              If an account with that username or email address exists, we&apos;ve dispatched a password reset link. Please check your inbox and spam folder.
             </p>
 
             <Link to="/login" className="btn btn-primary" style={{ marginTop: '0.5rem' }}>
@@ -114,17 +126,43 @@ export const ForgotPasswordPage: React.FC = () => {
                 />
                 <Mail
                   size={16}
-                  style={{ position: 'absolute', left: '0.85rem', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-dim)' }}
+                  style={{
+                    position: 'absolute',
+                    left: '0.85rem',
+                    top: '50%',
+                    transform: 'translateY(-50%)',
+                    color: 'var(--text-dim)'
+                  }}
                 />
               </div>
             </div>
 
-            <button type="submit" disabled={loading || !usernameOrEmail.trim()} className="btn btn-primary btn-lg" style={{ width: '100%' }}>
-              {loading ? 'Sending link...' : <><Send size={16} /> Send Reset Link</>}
+            <button
+              type="submit"
+              disabled={loading || !usernameOrEmail.trim()}
+              className="btn btn-primary btn-lg"
+              style={{ width: '100%' }}
+            >
+              {loading ? (
+                'Sending link...'
+              ) : (
+                <>
+                  <Send size={16} /> Send Reset Link
+                </>
+              )}
             </button>
 
             <div style={{ textAlign: 'center', marginTop: '0.5rem' }}>
-              <Link to="/login" style={{ color: 'var(--text-muted)', fontSize: '0.85rem', display: 'inline-flex', alignItems: 'center', gap: '0.35rem' }}>
+              <Link
+                to="/login"
+                style={{
+                  color: 'var(--text-muted)',
+                  fontSize: '0.85rem',
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '0.35rem'
+                }}
+              >
                 <ArrowLeft size={14} /> Back to Sign In
               </Link>
             </div>

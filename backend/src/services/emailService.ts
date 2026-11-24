@@ -1,27 +1,39 @@
 import nodemailer from 'nodemailer';
 import { queryOne } from '../db/connection';
 
+export function escapeHtml(input: unknown): string {
+  return String(input ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
 export class EmailService {
-  private static async getTransporter(): Promise<{ transporter: nodemailer.Transporter | null; fromAddress: string; appName: string }> {
+  private static async getTransporter(): Promise<{ transporter: ReturnType<typeof nodemailer.createTransport> | null; fromAddress: string; appName: string }> {
     const hostRow = await queryOne<{ value: string }>('SELECT value FROM system_settings WHERE key = ?', ['smtp_host']);
     const portRow = await queryOne<{ value: string }>('SELECT value FROM system_settings WHERE key = ?', ['smtp_port']);
     const userRow = await queryOne<{ value: string }>('SELECT value FROM system_settings WHERE key = ?', ['smtp_user']);
     const passRow = await queryOne<{ value: string }>('SELECT value FROM system_settings WHERE key = ?', ['smtp_pass']);
     const fromRow = await queryOne<{ value: string }>('SELECT value FROM system_settings WHERE key = ?', ['smtp_from']);
     const secureRow = await queryOne<{ value: string }>('SELECT value FROM system_settings WHERE key = ?', ['smtp_secure']);
+    const selfSignedRow = await queryOne<{ value: string }>('SELECT value FROM system_settings WHERE key = ?', ['smtp_allow_self_signed']);
     const appNameRow = await queryOne<{ value: string }>('SELECT value FROM system_settings WHERE key = ?', ['app_name']);
 
+    const appName = appNameRow?.value || 'DecaTone';
     const host = hostRow?.value?.trim();
     if (!host) {
-      return { transporter: null, fromAddress: '', appName: appNameRow?.value || 'DecaTone' };
+      return { transporter: null, fromAddress: '', appName };
     }
 
     const port = parseInt(portRow?.value || '587', 10);
     const secure = secureRow?.value === 'true' || port === 465;
     const user = userRow?.value?.trim();
     const pass = passRow?.value?.trim();
-    const appName = appNameRow?.value || 'DecaTone';
-    const fromAddress = fromRow?.value?.trim() || `${appName} Switchboard <noreply@${host}>`;
+    const allowSelfSigned = selfSignedRow?.value || process.env.SMTP_ALLOW_SELF_SIGNED || 'false';
+    const cleanAppName = appName.replace(/[\r\n<>"]/g, '');
+    const fromAddress = fromRow?.value?.trim() || `${cleanAppName} Switchboard <noreply@${host}>`;
 
     const transporter = nodemailer.createTransport({
       host,
@@ -29,22 +41,26 @@ export class EmailService {
       secure,
       auth: user ? { user, pass } : undefined,
       tls: {
-        rejectUnauthorized: false
+        rejectUnauthorized: allowSelfSigned !== 'true'
       }
     });
 
     return { transporter, fromAddress, appName };
   }
 
-  // Generates retro-styled HTML email template matching the DecaTone UI theme
   private static wrapEmailHtml(appName: string, title: string, bodyHtml: string, ctaUrl?: string, ctaText?: string): string {
+    const safeAppName = escapeHtml(appName);
+    const safeTitle = escapeHtml(title);
+    const safeCtaUrl = ctaUrl && /^https?:\/\//i.test(ctaUrl) ? escapeHtml(ctaUrl) : '';
+    const safeCtaText = ctaText ? escapeHtml(ctaText) : '';
+
     return `
 <!DOCTYPE html>
 <html>
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>${title}</title>
+  <title>${safeTitle}</title>
   <style>
     body { margin: 0; padding: 0; background-color: #0b0f17; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; color: #f3f4f6; }
     .wrapper { width: 100%; max-width: 580px; margin: 24px auto; background-color: #121826; border: 1px solid rgba(255, 255, 255, 0.1); border-radius: 14px; overflow: hidden; box-shadow: 0 10px 25px rgba(0,0,0,0.5); }
@@ -62,15 +78,15 @@ export class EmailService {
   <div style="padding: 16px;">
     <div class="wrapper">
       <div class="header">
-        <h1>☎️ ${appName}</h1>
+        <h1>☎️ ${safeAppName}</h1>
       </div>
       <div class="content">
-        <h2 style="margin-top: 0; font-size: 18px; color: #fff;">${title}</h2>
+        <h2 style="margin-top: 0; font-size: 18px; color: #fff;">${safeTitle}</h2>
         ${bodyHtml}
-        ${ctaUrl && ctaText ? `<div style="text-align: center;"><a href="${ctaUrl}" class="btn" target="_blank">${ctaText}</a></div>` : ''}
+        ${safeCtaUrl && safeCtaText ? `<div style="text-align: center;"><a href="${safeCtaUrl}" class="btn" target="_blank" rel="noopener noreferrer">${safeCtaText}</a></div>` : ''}
       </div>
       <div class="footer">
-        <div>${appName} &mdash; Open-Source Vintage Telephone Switchboard</div>
+        <div>${safeAppName} &mdash; Open-Source Vintage Telephone Switchboard</div>
         <div style="margin-top: 4px;">This is an automated system notification.</div>
       </div>
     </div>
@@ -80,7 +96,6 @@ export class EmailService {
     `;
   }
 
-  // 1. Password Reset Email
   public static async sendPasswordResetEmail(email: string, username: string, resetToken: string, baseUrl: string): Promise<boolean> {
     const { transporter, fromAddress, appName } = await this.getTransporter();
     if (!transporter) {
@@ -88,13 +103,16 @@ export class EmailService {
       return false;
     }
 
-    const resetUrl = `${baseUrl}/reset-password?token=${resetToken}`;
+    const resetUrl = `${baseUrl}/reset-password?token=${encodeURIComponent(resetToken)}`;
+    const safeUsername = escapeHtml(username);
+    const safeAppName = escapeHtml(appName);
+
     const html = this.wrapEmailHtml(
       appName,
       'Password Reset Request',
       `
-      <p>Hello <strong>@${username}</strong>,</p>
-      <p>We received a request to reset the password for your ${appName} switchboard account.</p>
+      <p>Hello <strong>@${safeUsername}</strong>,</p>
+      <p>We received a request to reset the password for your ${safeAppName} switchboard account.</p>
       <p>Click the button below to choose a new password. This link is valid for <strong>1 hour</strong>.</p>
       `,
       resetUrl,
@@ -116,20 +134,23 @@ export class EmailService {
     }
   }
 
-  // 2. Welcome Email
   public static async sendWelcomeEmail(email: string, user: any, baseUrl: string): Promise<boolean> {
     const { transporter, fromAddress, appName } = await this.getTransporter();
     if (!transporter) return false;
+
+    const safeDisplay = escapeHtml(user.displayName || user.username);
+    const safeAppName = escapeHtml(appName);
+    const safeExt = escapeHtml(user.phoneNumber || '---');
 
     const html = this.wrapEmailHtml(
       appName,
       'Welcome to Your New Switchboard Extension!',
       `
-      <p>Hello <strong>${user.displayName || user.username}</strong>,</p>
-      <p>Your ${appName} account has been created successfully. Your dedicated telephone extension is ready:</p>
+      <p>Hello <strong>${safeDisplay}</strong>,</p>
+      <p>Your ${safeAppName} account has been created successfully. Your dedicated telephone extension is ready:</p>
       <div class="highlight-box">
         <div style="font-size: 12px; color: #94a3b8; margin-bottom: 4px; text-transform: uppercase;">YOUR ASSIGNED EXTENSION:</div>
-        <div class="ext-number">${user.phoneNumber || '---'}</div>
+        <div class="ext-number">${safeExt}</div>
       </div>
       <p>You can now pair your ESP32-S3 rotary phone hardware, configure speed dials, and start making calls!</p>
       `,
@@ -151,21 +172,32 @@ export class EmailService {
     }
   }
 
-  // 3. New Voicemail Notification
-  public static async sendVoicemailNotification(email: string, user: any, callerNumber: string, callerName: string, durationSec: number, baseUrl: string): Promise<boolean> {
+  public static async sendVoicemailNotification(
+    email: string,
+    user: any,
+    callerNumber: string,
+    callerName: string,
+    durationSec: number,
+    baseUrl: string
+  ): Promise<boolean> {
     const { transporter, fromAddress, appName } = await this.getTransporter();
     if (!transporter) return false;
+
+    const safeDisplay = escapeHtml(user.displayName || user.display_name || user.username);
+    const safeCallerName = escapeHtml(callerName);
+    const safeCallerNum = escapeHtml(callerNumber);
+    const safeDur = Math.max(0, Math.round(Number(durationSec) || 0));
 
     const html = this.wrapEmailHtml(
       appName,
       'New Voicemail Message Received',
       `
-      <p>Hello <strong>${user.displayName || user.username}</strong>,</p>
+      <p>Hello <strong>${safeDisplay}</strong>,</p>
       <p>You have received a new zero-access encrypted voicemail message on your extension.</p>
       <div class="highlight-box" style="text-align: left; padding: 14px 20px;">
-        <div><strong>Caller:</strong> ${callerName} (EXT ${callerNumber})</div>
-        <div style="margin-top: 4px;"><strong>Duration:</strong> ${durationSec} seconds</div>
-        <div style="margin-top: 4px;"><strong>Security:</strong> AES-256-GCM Encrypted</div>
+        <div><strong>Caller:</strong> ${safeCallerName} (EXT ${safeCallerNum})</div>
+        <div style="margin-top: 4px;"><strong>Duration:</strong> ${safeDur} seconds</div>
+        <div style="margin-top: 4px;"><strong>Security:</strong> ECIES P-256 + AES-256-GCM Sealed</div>
       </div>
       <p>You can listen to this message in your web browser or by lifting your physical rotary phone and dialing <strong>0</strong>.</p>
       `,
@@ -177,7 +209,7 @@ export class EmailService {
       await transporter.sendMail({
         from: fromAddress,
         to: email,
-        subject: `[${appName}] New Voicemail from ${callerName} (${durationSec}s)`,
+        subject: `[${appName}] New Voicemail from ${callerName} (${safeDur}s)`,
         html
       });
       return true;
@@ -187,20 +219,30 @@ export class EmailService {
     }
   }
 
-  // 4. Missed Call Notification
-  public static async sendMissedCallNotification(email: string, user: any, callerNumber: string, callerName: string, baseUrl: string): Promise<boolean> {
+  public static async sendMissedCallNotification(
+    email: string,
+    user: any,
+    callerNumber: string,
+    callerName: string,
+    baseUrl: string
+  ): Promise<boolean> {
     const { transporter, fromAddress, appName } = await this.getTransporter();
     if (!transporter) return false;
+
+    const safeDisplay = escapeHtml(user.displayName || user.display_name || user.username);
+    const safeAppName = escapeHtml(appName);
+    const safeCallerName = escapeHtml(callerName);
+    const safeCallerNum = escapeHtml(callerNumber);
 
     const html = this.wrapEmailHtml(
       appName,
       'Missed Call Notification',
       `
-      <p>Hello <strong>${user.displayName || user.username}</strong>,</p>
-      <p>You missed a call on your ${appName} rotary phone from:</p>
+      <p>Hello <strong>${safeDisplay}</strong>,</p>
+      <p>You missed a call on your ${safeAppName} rotary phone from:</p>
       <div class="highlight-box">
-        <div style="font-size: 18px; font-weight: bold; color: #38bdf8;">${callerName}</div>
-        <div style="color: #94a3b8; font-family: monospace; font-size: 14px; margin-top: 4px;">Extension ${callerNumber}</div>
+        <div style="font-size: 18px; font-weight: bold; color: #38bdf8;">${safeCallerName}</div>
+        <div style="color: #94a3b8; font-family: monospace; font-size: 14px; margin-top: 4px;">Extension ${safeCallerNum}</div>
       </div>
       `,
       baseUrl,
@@ -221,22 +263,23 @@ export class EmailService {
     }
   }
 
-  // 5. Test Email (Admin Diagnostic)
   public static async sendTestEmail(toEmail: string, baseUrl: string): Promise<{ success: boolean; message: string }> {
     const { transporter, fromAddress, appName } = await this.getTransporter();
     if (!transporter) {
       return { success: false, message: 'SMTP is not configured. Please fill in SMTP Host and credentials first.' };
     }
 
+    const safeAppName = escapeHtml(appName);
+
     const html = this.wrapEmailHtml(
       appName,
       'SMTP Email Configuration Test',
       `
-      <p>Congratulations! Your ${appName} SMTP outbound mail dispatcher is configured and communicating properly.</p>
+      <p>Congratulations! Your ${safeAppName} SMTP outbound mail dispatcher is configured and communicating properly.</p>
       <div class="highlight-box" style="color: #34d399; font-weight: 600;">
         ✅ SMTP Connection Verified Successfully
       </div>
-      <p>All automated notifications (password resets, welcome greetings, and voicemail alerts) will be delivered from this server.</p>
+      <p>All automated notifications (password resets, welcome greetings, missed call alerts, and voicemail alerts) will be delivered from this server.</p>
       `,
       baseUrl,
       'Go to Dashboard'

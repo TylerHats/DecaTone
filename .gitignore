@@ -8,18 +8,21 @@ dist/
 build/
 *.tsbuildinfo
 
-# Persistent Data & User Uploads (Kept in Docker Volumes or local data dir)
+# Persistent Data, TTS Models & User Uploads (Kept in Docker Volumes or local data dir)
 data/
+uploads/
 backend/data/
 backend/uploads/
 backend/dist/
 frontend/dist/
-simulator/
+tts-voices/
+piper/
 *.db
 *.db-journal
 *.db-wal
 *.db-shm
 *.tar.gz
+*.enc
 backups/
 
 # PlatformIO & Embedded Firmware
@@ -39,6 +42,7 @@ firmware/build/
 .env.development.local
 .env.test.local
 .env.production.local
+jwt.secret
 *.pem
 *.key
 *.cert

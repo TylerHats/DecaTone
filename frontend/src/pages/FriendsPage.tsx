@@ -1,5 +1,19 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { Users, UserPlus, Phone, Check, X, Trash2, Search, Zap, Shield, PhoneCall, Star, Bell, Sliders, Volume2, Play, Square } from 'lucide-react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
+import {
+  Users,
+  UserPlus,
+  Check,
+  X,
+  Trash2,
+  Search,
+  Zap,
+  PhoneCall,
+  Star,
+  Bell,
+  Sliders,
+  Play,
+  Square
+} from 'lucide-react';
 import { usePhone } from '../context/PhoneContext';
 
 interface Friend {
@@ -34,7 +48,7 @@ interface SpeedDialSlot {
 }
 
 export const FriendsPage: React.FC = () => {
-  const { dialNumber } = usePhone();
+  const { dialNumber, openWebPhoneWithNumber } = usePhone();
 
   const [friends, setFriends] = useState<Friend[]>([]);
   const [incomingReqs, setIncomingReqs] = useState<FriendRequest[]>([]);
@@ -53,45 +67,56 @@ export const FriendsPage: React.FC = () => {
   const [customCadenceInput, setCustomCadenceInput] = useState('1000,500,1000,3500');
   const [isPlayingPreview, setIsPlayingPreview] = useState(false);
   const audioCtxRef = useRef<AudioContext | null>(null);
-  const previewTimerRef = useRef<any[]>([]);
+  const previewTimerRef = useRef<ReturnType<typeof setTimeout>[]>([]);
 
-  const token = localStorage.getItem('decatone_token');
+  const stopBellSimulation = useCallback(() => {
+    previewTimerRef.current.forEach((t) => clearTimeout(t));
+    previewTimerRef.current = [];
+    if (audioCtxRef.current && audioCtxRef.current.state !== 'closed') {
+      audioCtxRef.current.close().catch(() => {});
+      audioCtxRef.current = null;
+    }
+    setIsPlayingPreview(false);
+  }, []);
 
   useEffect(() => {
-    fetchFriends();
-    fetchRequests();
-    fetchSpeedDials();
-  }, []);
+    void fetchFriends();
+    void fetchRequests();
+    void fetchSpeedDials();
+    return () => {
+      stopBellSimulation();
+    };
+  }, [stopBellSimulation]);
 
   const fetchFriends = async () => {
     try {
-      const res = await fetch('/api/friends', { headers: { Authorization: `Bearer ${token}` } });
+      const res = await fetch('/api/friends', { credentials: 'include' });
       if (res.ok) {
         const data = await res.json();
         setFriends(data.friends || []);
       }
-    } catch (e) {}
+    } catch {}
   };
 
   const fetchRequests = async () => {
     try {
-      const res = await fetch('/api/friends/requests', { headers: { Authorization: `Bearer ${token}` } });
+      const res = await fetch('/api/friends/requests', { credentials: 'include' });
       if (res.ok) {
         const data = await res.json();
         setIncomingReqs(data.incoming || []);
         setOutgoingReqs(data.outgoing || []);
       }
-    } catch (e) {}
+    } catch {}
   };
 
   const fetchSpeedDials = async () => {
     try {
-      const res = await fetch('/api/phone/speed-dials', { headers: { Authorization: `Bearer ${token}` } });
+      const res = await fetch('/api/phone/speed-dials', { credentials: 'include' });
       if (res.ok) {
         const data = await res.json();
         setSpeedDials(data.speedDials || []);
       }
-    } catch (e) {}
+    } catch {}
   };
 
   const handleSearch = async (e: React.FormEvent) => {
@@ -101,13 +126,13 @@ export const FriendsPage: React.FC = () => {
     setSearchLoading(true);
     try {
       const res = await fetch(`/api/friends/search?q=${encodeURIComponent(searchQuery.trim())}`, {
-        headers: { Authorization: `Bearer ${token}` }
+        credentials: 'include'
       });
       if (res.ok) {
         const data = await res.json();
         setSearchResults(data.users || []);
       }
-    } catch (e) {}
+    } catch {}
     setSearchLoading(false);
   };
 
@@ -115,36 +140,42 @@ export const FriendsPage: React.FC = () => {
     try {
       const res = await fetch('/api/friends/request', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
         body: JSON.stringify({ target })
       });
       const data = await res.json();
       if (res.ok) {
-        setToast({ type: 'success', text: data.message });
-        fetchRequests();
-        fetchFriends();
+        setToast({ type: 'success', text: data.message || 'Friend request sent!' });
+        void fetchRequests();
+        void fetchFriends();
       } else {
-        setToast({ type: 'error', text: data.error });
+        setToast({ type: 'error', text: data.error || 'Could not send friend request' });
       }
-    } catch (e) {}
+    } catch {
+      setToast({ type: 'error', text: 'Network error sending friend request' });
+    }
   };
 
   const handleRespondRequest = async (requestId: number, action: 'accept' | 'decline') => {
     try {
       const res = await fetch('/api/friends/respond', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
         body: JSON.stringify({ requestId, action })
       });
       if (res.ok) {
         setToast({ type: 'success', text: `Request ${action}ed!` });
-        fetchRequests();
-        fetchFriends();
+        void fetchRequests();
+        void fetchFriends();
       } else {
-        const data = await res.json();
+        const data = await res.json().catch(() => ({}));
         setToast({ type: 'error', text: data.error || 'Failed to update friend request' });
       }
-    } catch (e) {}
+    } catch {
+      setToast({ type: 'error', text: 'Network error responding to friend request' });
+    }
   };
 
   const handleRemoveFriend = async (friendId: number) => {
@@ -152,13 +183,19 @@ export const FriendsPage: React.FC = () => {
     try {
       const res = await fetch(`/api/friends/${friendId}`, {
         method: 'DELETE',
-        headers: { Authorization: `Bearer ${token}` }
+        credentials: 'include'
       });
       if (res.ok) {
-        fetchFriends();
-        fetchSpeedDials();
+        setToast({ type: 'success', text: 'Friend removed.' });
+        void fetchFriends();
+        void fetchSpeedDials();
+      } else {
+        const data = await res.json().catch(() => ({}));
+        setToast({ type: 'error', text: data.error || 'Failed to remove friend' });
       }
-    } catch (e) {}
+    } catch {
+      setToast({ type: 'error', text: 'Failed to remove friend' });
+    }
   };
 
   const handleUpdateFriendSettings = async (
@@ -168,17 +205,21 @@ export const FriendsPage: React.FC = () => {
     try {
       const res = await fetch(`/api/friends/${friendId}/settings`, {
         method: 'PUT',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
         body: JSON.stringify(settings)
       });
       if (res.ok) {
-        setFriends(prev =>
-          prev.map(f => {
+        setFriends((prev) =>
+          prev.map((f) => {
             if (f.id === friendId) {
               return {
                 ...f,
                 ring_style: settings.ringStyle !== undefined ? settings.ringStyle : f.ring_style,
-                ring_cadence_custom: settings.ringCadenceCustom !== undefined ? settings.ringCadenceCustom : f.ring_cadence_custom,
+                ring_cadence_custom:
+                  settings.ringCadenceCustom !== undefined
+                    ? settings.ringCadenceCustom
+                    : f.ring_cadence_custom,
                 is_vip: settings.isVip !== undefined ? (settings.isVip ? 1 : 0) : f.is_vip
               };
             }
@@ -186,62 +227,95 @@ export const FriendsPage: React.FC = () => {
           })
         );
         setToast({ type: 'success', text: 'Friend settings updated!' });
+      } else {
+        const data = await res.json().catch(() => ({}));
+        setToast({ type: 'error', text: data.error || 'Failed to update friend settings' });
       }
-    } catch (e) {
+    } catch {
       setToast({ type: 'error', text: 'Failed to update friend settings' });
     }
   };
 
-  const handleSaveSpeedDial = async (slotDigit: number, targetPhoneNumber: string, label?: string, targetUserId?: number) => {
+  const handleSaveSpeedDial = async (
+    slotDigit: number,
+    targetPhoneNumber: string,
+    label?: string,
+    targetUserId?: number
+  ) => {
     try {
       const res = await fetch('/api/phone/speed-dials', {
         method: 'PUT',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
         body: JSON.stringify({ slotDigit, targetPhoneNumber, label, targetUserId })
       });
       if (res.ok) {
         setToast({ type: 'success', text: `Speed dial [${slotDigit}] saved!` });
-        fetchSpeedDials();
+        void fetchSpeedDials();
+      } else {
+        const data = await res.json().catch(() => ({}));
+        setToast({ type: 'error', text: data.error || 'Failed to save speed dial' });
       }
-    } catch (e) {}
+    } catch {
+      setToast({ type: 'error', text: 'Failed to save speed dial' });
+    }
   };
 
   const handleDeleteSpeedDial = async (slotDigit: number) => {
     try {
-      await fetch(`/api/phone/speed-dials/${slotDigit}`, {
+      const res = await fetch(`/api/phone/speed-dials/${slotDigit}`, {
         method: 'DELETE',
-        headers: { Authorization: `Bearer ${token}` }
+        credentials: 'include'
       });
-      fetchSpeedDials();
-    } catch (e) {}
+      if (res.ok) {
+        void fetchSpeedDials();
+      } else {
+        const data = await res.json().catch(() => ({}));
+        setToast({ type: 'error', text: data.error || 'Failed to clear speed dial' });
+      }
+    } catch {
+      setToast({ type: 'error', text: 'Failed to clear speed dial' });
+    }
   };
 
   // Web Audio Synthesizer: 20Hz Dual Gong Vintage Mechanical Bell Preview
   const playBellSimulation = (cadenceStr: string) => {
     stopBellSimulation();
-    setIsPlayingPreview(true);
+
+    const intervals = cadenceStr
+      .split(',')
+      .map((s) => parseInt(s.trim(), 10))
+      .filter((n) => !isNaN(n) && n > 0);
+
+    if (intervals.length === 0) {
+      setToast({
+        type: 'error',
+        text: 'Enter valid comma-separated ring durations in milliseconds (e.g. 1000,500,1000,3500).'
+      });
+      return;
+    }
 
     try {
       const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
       const ctx = new AudioCtx();
       audioCtxRef.current = ctx;
-
-      const intervals = cadenceStr.split(',').map(s => parseInt(s.trim(), 10)).filter(n => !isNaN(n) && n > 0);
-      if (intervals.length === 0) return;
+      setIsPlayingPreview(true);
 
       let currentTimeMs = 0;
       intervals.forEach((durationMs, idx) => {
         const isRingOn = idx % 2 === 0;
         if (isRingOn) {
           const timer = setTimeout(() => {
-            if (!audioCtxRef.current) return;
+            if (!audioCtxRef.current || audioCtxRef.current.state === 'closed') return;
             const now = ctx.currentTime;
-            
-            // Dual Gong: Gong 1 (1050Hz) + Gong 2 (1320Hz) modulated with 20Hz LFO striker
+            const durSec = Math.max(0.05, durationMs / 1000);
+
+            // Dual Gong: Gong 1 (1050Hz) + Gong 2 (1320Hz) modulated by 20Hz mechanical clapper LFO
             const osc1 = ctx.createOscillator();
             const osc2 = ctx.createOscillator();
+            const modGainNode = ctx.createGain();
             const lfo = ctx.createOscillator();
-            const lfoGain = ctx.createGain();
+            const lfoDepth = ctx.createGain();
             const mainGain = ctx.createGain();
 
             osc1.type = 'sine';
@@ -250,23 +324,28 @@ export const FriendsPage: React.FC = () => {
             osc2.type = 'sine';
             osc2.frequency.setValueAtTime(1320, now);
 
+            // Base carrier gain = 0.5, LFO depth = +/-0.5 -> oscillates 0.0..1.0 at 20Hz
+            modGainNode.gain.setValueAtTime(0.5, now);
             lfo.type = 'square';
-            lfo.frequency.setValueAtTime(20, now); // 20Hz mechanical clapper strike rate
-            lfoGain.gain.setValueAtTime(0.5, now);
+            lfo.frequency.setValueAtTime(20, now);
+            lfoDepth.gain.setValueAtTime(0.5, now);
 
-            mainGain.gain.setValueAtTime(0.3, now);
-            mainGain.gain.linearRampToValueAtTime(0.01, now + (durationMs / 1000));
+            mainGain.gain.setValueAtTime(0.28, now);
+            mainGain.gain.setValueAtTime(0.26, now + Math.max(0, durSec - 0.04));
+            mainGain.gain.linearRampToValueAtTime(0.001, now + durSec);
 
-            lfo.connect(lfoGain.gain);
-            osc1.connect(mainGain);
-            osc2.connect(mainGain);
+            osc1.connect(modGainNode);
+            osc2.connect(modGainNode);
+            lfo.connect(lfoDepth);
+            lfoDepth.connect(modGainNode.gain);
+            modGainNode.connect(mainGain);
             mainGain.connect(ctx.destination);
 
             osc1.start(now);
             osc2.start(now);
             lfo.start(now);
 
-            const stopTime = now + (durationMs / 1000);
+            const stopTime = now + durSec;
             osc1.stop(stopTime);
             osc2.stop(stopTime);
             lfo.stop(stopTime);
@@ -277,23 +356,13 @@ export const FriendsPage: React.FC = () => {
       });
 
       const endTimer = setTimeout(() => {
-        setIsPlayingPreview(false);
+        stopBellSimulation();
       }, currentTimeMs + 100);
       previewTimerRef.current.push(endTimer);
     } catch (e) {
       console.error(e);
-      setIsPlayingPreview(false);
+      stopBellSimulation();
     }
-  };
-
-  const stopBellSimulation = () => {
-    previewTimerRef.current.forEach(t => clearTimeout(t));
-    previewTimerRef.current = [];
-    if (audioCtxRef.current) {
-      audioCtxRef.current.close().catch(() => {});
-      audioCtxRef.current = null;
-    }
-    setIsPlayingPreview(false);
   };
 
   return (
@@ -307,7 +376,7 @@ export const FriendsPage: React.FC = () => {
         </div>
 
         {/* Tab Controls */}
-        <div style={{ display: 'flex', gap: '0.5rem', background: 'rgba(255,255,255,0.04)', padding: '0.35rem', borderRadius: 'var(--radius-md)' }}>
+        <div style={{ display: 'flex', gap: '0.5rem', background: 'rgba(255,255,255,0.04)', padding: '0.35rem', borderRadius: 'var(--radius-md)', flexWrap: 'wrap' }}>
           <button
             onClick={() => setActiveTab('directory')}
             className={`btn btn-sm ${activeTab === 'directory' ? 'btn-primary' : 'btn-secondary'}`}
@@ -394,7 +463,7 @@ export const FriendsPage: React.FC = () => {
                       </div>
                     </div>
                     <button
-                      onClick={() => handleSendRequest(u.username)}
+                      onClick={() => void handleSendRequest(u.username)}
                       className="btn btn-secondary btn-sm"
                     >
                       <UserPlus size={14} /> Send Request
@@ -437,7 +506,7 @@ export const FriendsPage: React.FC = () => {
                           <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
                             <strong style={{ fontSize: '1.05rem', color: '#fff' }}>{f.display_name || f.username}</strong>
                             <button
-                              onClick={() => handleUpdateFriendSettings(f.id, { isVip: !isVip })}
+                              onClick={() => void handleUpdateFriendSettings(f.id, { isVip: !isVip })}
                               title={isVip ? 'VIP Friend (Bypasses DND). Click to toggle.' : 'Set as VIP Friend'}
                               style={{
                                 background: 'transparent',
@@ -478,7 +547,7 @@ export const FriendsPage: React.FC = () => {
                                 setDesignerFriend(f);
                                 setCustomCadenceInput(f.ring_cadence_custom || '1000,500,1000,3500');
                               } else {
-                                handleUpdateFriendSettings(f.id, { ringStyle: val });
+                                void handleUpdateFriendSettings(f.id, { ringStyle: val });
                               }
                             }}
                           >
@@ -506,20 +575,29 @@ export const FriendsPage: React.FC = () => {
                       </div>
 
                       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderTop: '1px solid var(--border-subtle)', paddingTop: '0.75rem' }}>
-                        <span style={{ fontFamily: 'var(--font-mono)', fontSize: '1.1rem', fontWeight: '700', color: 'var(--accent-amber)' }}>
+                        <span style={{ fontFamily: 'var(--font-mono)', fontSize: '1.1rem', fontWeight: 700, color: 'var(--accent-amber)' }}>
                           EXT {f.phone_number}
                         </span>
 
                         <div style={{ display: 'flex', gap: '0.5rem' }}>
                           <button
-                            onClick={() => dialNumber(f.phone_number)}
+                            onClick={async () => {
+                              const ok = await dialNumber(f.phone_number);
+                              if (!ok) {
+                                setToast({
+                                  type: 'error',
+                                  text: `Hardware phone offline — opening Web Softphone for EXT ${f.phone_number}`
+                                });
+                                openWebPhoneWithNumber(f.phone_number);
+                              }
+                            }}
                             className="btn btn-primary btn-sm"
-                            title="Call on physical phone"
+                            title="Call friend"
                           >
                             <PhoneCall size={14} /> Call
                           </button>
                           <button
-                            onClick={() => handleRemoveFriend(f.id)}
+                            onClick={() => void handleRemoveFriend(f.id)}
                             className="btn btn-secondary btn-sm"
                             title="Remove Friend"
                             style={{ padding: '0.4rem 0.6rem' }}
@@ -549,7 +627,7 @@ export const FriendsPage: React.FC = () => {
 
           <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
             {[1, 2, 3, 4, 5, 6, 7, 8, 9].map((slot) => {
-              const current = speedDials.find(s => s.slot_digit === slot);
+              const current = speedDials.find((s) => s.slot_digit === slot);
               return (
                 <div
                   key={slot}
@@ -577,7 +655,7 @@ export const FriendsPage: React.FC = () => {
                         alignItems: 'center',
                         justifyContent: 'center',
                         fontFamily: 'var(--font-mono)',
-                        fontWeight: '800',
+                        fontWeight: 800,
                         fontSize: '1.1rem',
                         color: '#fbbf24'
                       }}
@@ -609,15 +687,20 @@ export const FriendsPage: React.FC = () => {
                       onChange={(e) => {
                         const selectedNum = e.target.value;
                         if (!selectedNum) {
-                          handleDeleteSpeedDial(slot);
+                          void handleDeleteSpeedDial(slot);
                         } else {
-                          const friend = friends.find(f => f.phone_number === selectedNum);
-                          handleSaveSpeedDial(slot, selectedNum, friend ? friend.display_name || friend.username : undefined, friend?.id);
+                          const friend = friends.find((f) => f.phone_number === selectedNum);
+                          void handleSaveSpeedDial(
+                            slot,
+                            selectedNum,
+                            friend ? friend.display_name || friend.username : undefined,
+                            friend?.id
+                          );
                         }
                       }}
                     >
                       <option value="">-- Choose Friend / Extension --</option>
-                      {friends.map(f => (
+                      {friends.map((f) => (
                         <option key={f.id} value={f.phone_number}>
                           {f.display_name || f.username} (EXT {f.phone_number})
                         </option>
@@ -626,7 +709,7 @@ export const FriendsPage: React.FC = () => {
 
                     {current && (
                       <button
-                        onClick={() => handleDeleteSpeedDial(slot)}
+                        onClick={() => void handleDeleteSpeedDial(slot)}
                         className="btn btn-danger btn-sm"
                         style={{ padding: '0.4rem 0.6rem' }}
                       >
@@ -680,10 +763,10 @@ export const FriendsPage: React.FC = () => {
                       </div>
 
                       <div style={{ display: 'flex', gap: '0.5rem' }}>
-                        <button onClick={() => handleRespondRequest(req.id, 'accept')} className="btn btn-primary btn-sm">
+                        <button onClick={() => void handleRespondRequest(req.id, 'accept')} className="btn btn-primary btn-sm">
                           <Check size={14} /> Accept
                         </button>
-                        <button onClick={() => handleRespondRequest(req.id, 'decline')} className="btn btn-secondary btn-sm">
+                        <button onClick={() => void handleRespondRequest(req.id, 'decline')} className="btn btn-secondary btn-sm">
                           <X size={14} /> Decline
                         </button>
                       </div>
@@ -823,7 +906,7 @@ export const FriendsPage: React.FC = () => {
                         alignItems: 'center',
                         justifyContent: 'center',
                         fontSize: '0.65rem',
-                        fontWeight: '700',
+                        fontWeight: 700,
                         color: isRing ? '#000' : 'var(--text-dim)',
                         borderRight: '1px solid rgba(0,0,0,0.4)'
                       }}
@@ -837,7 +920,7 @@ export const FriendsPage: React.FC = () => {
             </div>
 
             {/* Actions */}
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '0.5rem' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '0.5rem', flexWrap: 'wrap', gap: '0.5rem' }}>
               <button
                 type="button"
                 onClick={() => {
@@ -868,7 +951,7 @@ export const FriendsPage: React.FC = () => {
                   type="button"
                   onClick={() => {
                     stopBellSimulation();
-                    handleUpdateFriendSettings(designerFriend.id, {
+                    void handleUpdateFriendSettings(designerFriend.id, {
                       ringStyle: 'custom',
                       ringCadenceCustom: customCadenceInput.trim()
                     });

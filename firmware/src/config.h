@@ -2,6 +2,13 @@
 #include <Arduino.h>
 
 // =============================================================================
+// DecaTone Firmware & Storage Configuration
+// =============================================================================
+#define FIRMWARE_VERSION        "1.3.0"
+#define NVS_NAMESPACE           "decatone"
+#define AP_SETUP_PASSWORD       "decatone"
+
+// =============================================================================
 // DecaTone ESP32-S3 Pin Configuration (Hosyond ESP32-S3-WROOM-1)
 // =============================================================================
 
@@ -14,8 +21,9 @@
 // Rotary Dial Off-Normal / Shunt Switch (Active LOW while dial is in motion)
 #define PIN_DIAL_OFF_NORMAL     6   // GPIO 6 (ADC1_5 / RTC)
 
-// Physical Bell Ringer (Drives IRF640N MOSFET gate via 20Hz-25Hz PWM)
-#define PIN_BELL_RINGER         7   // GPIO 7 (PWM capable)
+// Physical Bell Ringer H-Bridge Outputs (DRV8871 / Dual Logic-Level MOSFET Bridge)
+#define PIN_BELL_RINGER         7   // GPIO 7  (H-Bridge IN1)
+#define PIN_BELL_RINGER_IN2     15  // GPIO 15 (H-Bridge IN2 complementary output)
 
 // Handset Microphone Input (MAX4466 Analog Electret Mic Out -> ADC1 Channel 0)
 #define PIN_MIC_ADC             1   // GPIO 1 (ADC1_CH0)
@@ -28,7 +36,7 @@
 // Built-in WS2812 RGB Status LED
 #define PIN_STATUS_LED          48  // GPIO 48 (RGB LED)
 
-// Boot / Configuration Button (Hold 5 seconds on startup for AP setup)
+// Boot / Configuration Button (Hold 5 seconds for Factory Reset & AP Setup)
 #define PIN_BOOT_BUTTON         0   // GPIO 0
 
 // =============================================================================
@@ -39,10 +47,11 @@
 #define AUDIO_BUFFER_SAMPLES    256     // Low-latency 16ms audio frames
 #define DEFAULT_BELL_FREQ_HZ    20.0f   // Default Bell AC Resonance (20 Hz)
 #define ROTARY_DEBOUNCE_MS      15      // Pulse contact debouncing
+#define HOOK_DEBOUNCE_MS        30      // Stable-state hook switch debounce
+#define PULSE_COMPLETE_MS       320     // Inter-digit completion gap (supports antique governors)
 #define INTER_DIGIT_TIMEOUT_MS  3000    // Inter-digit timeout before placing call
+#define BOOT_RESET_HOLD_MS      5000    // 5-second hold on BOOT button for factory reset
 
 // Hook-Flash Call Transfer Detection Window
 #define HOOK_FLASH_MIN_MS       80      // Minimum duration for valid flash
 #define HOOK_FLASH_MAX_MS       500     // Maximum duration before treated as on-hook hangup
-
-// NVS Storage Namespace
